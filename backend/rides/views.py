@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db.models import Q
 from math import radians, cos, sin, asin, sqrt
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from .models import User, DriverProfile, RideRequest
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
@@ -175,8 +177,17 @@ def create_ride_request(request):
     if serializer.is_valid():
         ride = serializer.save(passenger=request.user)
         
-        # TODO: Broadcast to nearby drivers via WebSocket
-        # For now, return success response
+        # Broadcast to nearby drivers via WebSocket
+        channel_layer = get_channel_layer()
+        ride_data = RideRequestSerializer(ride).data
+        
+        async_to_sync(channel_layer.group_send)(
+            'available_drivers',  # Group name for all available drivers
+            {
+                'type': 'new_ride_request',
+                'ride_data': ride_data
+            }
+        )
         
         response_serializer = RideRequestSerializer(ride)
         return Response({
@@ -241,6 +252,30 @@ def cancel_ride(request, ride_id):
         if ride.driver and hasattr(ride.driver, 'driver_profile'):
             ride.driver.driver_profile.status = 'available'
             ride.driver.driver_profile.save()
+        
+        # Notify via WebSocket
+        channel_layer = get_channel_layer()
+        
+        # Notify all drivers
+        if ride.status == 'pending':
+            async_to_sync(channel_layer.group_send)(
+                'available_drivers',
+                {
+                    'type': 'ride_cancelled',
+                    'ride_id': ride.id
+                }
+            )
+        
+        # Notify driver if assigned
+        if ride.driver:
+            async_to_sync(channel_layer.group_send)(
+                f'ride_{ride.id}',
+                {
+                    'type': 'status_broadcast',
+                    'status': 'cancelled_user',
+                    'message': 'Ride cancelled by passenger'
+                }
+            )
         
         return Response({'message': 'Ride cancelled successfully'})
     
@@ -353,6 +388,26 @@ def accept_ride(request, ride_id):
     # Update driver status to busy
     driver_profile.status = 'busy'
     driver_profile.save()
+    
+    # Notify all drivers that this ride has been accepted
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        'available_drivers',
+        {
+            'type': 'ride_accepted',
+            'ride_id': ride.id
+        }
+    )
+    
+    # Notify passenger via ride tracking channel
+    async_to_sync(channel_layer.group_send)(
+        f'ride_{ride.id}',
+        {
+            'type': 'status_broadcast',
+            'status': 'accepted',
+            'message': f'Driver {request.user.username} is on the way!'
+        }
+    )
     
     serializer = RideRequestSerializer(ride)
     return Response({
