@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'profile.dart';
 
 void main() {
@@ -57,11 +59,15 @@ class UserMapScreen extends StatefulWidget {
 
 class _UserMapScreenState extends State<UserMapScreen> {
   LatLng? _currentPosition;
+  bool _isLoading = false;
 
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
   final TextEditingController _dropController = TextEditingController();
   final TextEditingController _passengerController = TextEditingController();
+
+  // API Configuration
+  static const String baseUrl = 'http://localhost:8000';
 
   @override
   void initState() {
@@ -97,6 +103,123 @@ class _UserMapScreenState extends State<UserMapScreen> {
     } catch (e) {
       debugPrint('Error getting location: $e');
     }
+  }
+
+  // Create ride request API call
+  Future<void> _createRideRequest() async {
+    // Validation
+    if (widget.accessToken == null) {
+      _showErrorSnackBar('Please login first');
+      return;
+    }
+
+    if (_pickupController.text.trim().isEmpty) {
+      _showErrorSnackBar('Please enter pickup location');
+      return;
+    }
+
+    if (_dropController.text.trim().isEmpty) {
+      _showErrorSnackBar('Please enter drop location');
+      return;
+    }
+
+    if (_passengerController.text.trim().isEmpty) {
+      _showErrorSnackBar('Please enter number of passengers');
+      return;
+    }
+
+    final int passengers = int.tryParse(_passengerController.text.trim()) ?? 0;
+    if (passengers <= 0) {
+      _showErrorSnackBar('Please enter valid number of passengers');
+      return;
+    }
+
+    if (_currentPosition == null) {
+      _showErrorSnackBar('Location not available. Please wait and try again.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Prepare ride data
+      final rideData = {
+        'pickup_latitude': _currentPosition!.latitude,
+        'pickup_longitude': _currentPosition!.longitude,
+        'pickup_address': _pickupController.text.trim(),
+        'dropoff_latitude':
+            _currentPosition!.latitude + 0.01, // Simple offset for testing
+        'dropoff_longitude': _currentPosition!.longitude + 0.01,
+        'dropoff_address': _dropController.text.trim(),
+        'number_of_passengers': passengers,
+        'broadcast_radius': 5000, // 5km radius
+      };
+
+      print('=== RIDE REQUEST ===');
+      print('Creating ride request: $rideData');
+      print('==================');
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/rides/request/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode(rideData),
+      );
+
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+
+      if (response.statusCode == 201) {
+        final responseData = json.decode(response.body);
+        _showSuccessSnackBar('Ride request created! ID: ${responseData['id']}');
+
+        // Clear form
+        _pickupController.clear();
+        _dropController.clear();
+        _passengerController.clear();
+
+        // You could navigate to a ride tracking page here
+        // Navigator.push(context, MaterialPageRoute(builder: (_) => RideTrackingPage(rideId: responseData['id'])));
+      } else if (response.statusCode == 400) {
+        final errorData = json.decode(response.body);
+        _showErrorSnackBar('Error: ${errorData['error'] ?? 'Bad request'}');
+      } else if (response.statusCode == 403) {
+        _showErrorSnackBar('Permission denied. Please login again.');
+      } else {
+        _showErrorSnackBar('Unexpected error. Please try again.');
+      }
+    } catch (e) {
+      print('Network error: $e');
+      _showErrorSnackBar('Network error. Please check your connection.');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   // Show logout confirmation dialog
@@ -221,51 +344,63 @@ class _UserMapScreenState extends State<UserMapScreen> {
                       children: [
                         TextField(
                           controller: _pickupController,
+                          enabled: !_isLoading,
                           decoration: const InputDecoration(
                             labelText: 'Pickup Location',
                             border: OutlineInputBorder(),
+                            prefixIcon: Icon(
+                              Icons.location_on,
+                              color: Colors.green,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 10),
                         TextField(
                           controller: _dropController,
+                          enabled: !_isLoading,
                           decoration: const InputDecoration(
                             labelText: 'Drop Location',
                             border: OutlineInputBorder(),
+                            prefixIcon: Icon(
+                              Icons.location_on,
+                              color: Colors.red,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 10),
                         TextField(
                           controller: _passengerController,
+                          enabled: !_isLoading,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                             labelText: 'Number of Passengers',
                             border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.group, color: Colors.blue),
                           ),
                         ),
                         const SizedBox(height: 20),
                         ElevatedButton.icon(
-                          onPressed: () {
-                            // 👇 Print all info to console
-                            print('Pickup: ${_pickupController.text}');
-                            print('Drop: ${_dropController.text}');
-                            print('Passengers: ${_passengerController.text}');
-                            print(
-                              'Current Location: ${_currentPosition?.latitude}, ${_currentPosition?.longitude}',
-                            );
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Passenger alert info printed in console',
-                                ),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.notification_important),
-                          label: const Text('Alert Nearby E-Rickshaw'),
+                          onPressed: _isLoading ? null : _createRideRequest,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(Icons.notification_important),
+                          label: Text(
+                            _isLoading
+                                ? 'Creating Request...'
+                                : 'Alert Nearby E-Rickshaw',
+                          ),
                           style: ElevatedButton.styleFrom(
                             minimumSize: const Size(double.infinity, 50),
+                            backgroundColor: _isLoading ? Colors.grey : null,
                           ),
                         ),
                       ],

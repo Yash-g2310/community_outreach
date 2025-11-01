@@ -598,7 +598,7 @@ def driver_cancel_ride(request, ride_id):
         ride = RideRequest.objects.get(
             id=ride_id,
             driver=request.user,
-            status__in=['accepted', 'in_progress']
+            status__in=['pending', 'accepted', 'in_progress']  # Allow cancelling pending rides that have driver assigned
         )
     except RideRequest.DoesNotExist:
         return Response(

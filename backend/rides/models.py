@@ -42,8 +42,8 @@ class DriverProfile(models.Model):
     
     # Status & location (for real-time tracking with OpenStreetMap)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='offline')
-    current_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    current_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     last_location_update = models.DateTimeField(null=True, blank=True)
     
     class Meta:
@@ -70,13 +70,13 @@ class RideRequest(models.Model):
     driver = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='accepted_rides')
     
     # Pickup location
-    pickup_latitude = models.DecimalField(max_digits=9, decimal_places=6)
-    pickup_longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    pickup_latitude = models.DecimalField(max_digits=10, decimal_places=6)
+    pickup_longitude = models.DecimalField(max_digits=10, decimal_places=6)
     pickup_address = models.TextField(null=True, blank=True)
     
     # Dropoff location
-    dropoff_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    dropoff_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    dropoff_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    dropoff_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     dropoff_address = models.TextField(null=True, blank=True)
     
     # Passenger count

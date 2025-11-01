@@ -226,7 +226,7 @@ class _DriverPageState extends State<DriverPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/$rideId/accept/'),
+        Uri.parse('$baseUrl/api/rides/rides/$rideId/accept/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -252,6 +252,51 @@ class _DriverPageState extends State<DriverPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error accepting ride: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _rejectRide(int rideId) async {
+    if (widget.jwtToken == null) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/rides/$rideId/driver-cancel/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        // Remove the rejected ride from notifications
+        setState(() {
+          notifications.removeWhere((notif) => notif['id'] == rideId);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ride rejected successfully! ❌'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      } else {
+        throw Exception('Failed to reject ride: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error rejecting ride: $e'),
           backgroundColor: Colors.red,
         ),
       );
@@ -335,19 +380,9 @@ class _DriverPageState extends State<DriverPage> {
                   ElevatedButton.icon(
                     onPressed: isLoading
                         ? null
-                        : () {
-                            setState(() {
-                              notifications.removeWhere(
-                                (element) => element['id'] == notif['id'],
-                              );
-                            });
+                        : () async {
                             Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text("Ride Declined ❌"),
-                                duration: Duration(seconds: 2),
-                              ),
-                            );
+                            await _rejectRide(notif['id'] as int);
                           },
                     icon: const Icon(Icons.cancel, color: Colors.white),
                     label: const Text("Decline"),
