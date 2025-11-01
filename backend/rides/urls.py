@@ -11,11 +11,11 @@ urlpatterns = [
     path('driver/profile/', views.driver_profile, name='driver-profile'),
     path('driver/status/', views.update_driver_status, name='driver-status'),
     path('driver/location/', views.update_driver_location, name='driver-location'),
+    # Need to verify
+    path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
     path('driver/nearby-rides/', views.nearby_rides, name='nearby-rides'),
     path('driver/current-ride/', views.driver_current_ride, name='driver-current-ride'),
     
-    # Passenger - See nearby drivers on map
-    path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
     
     # Passenger Ride Management
     path('rides/request/', views.create_ride_request, name='create-ride'),

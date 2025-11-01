@@ -125,13 +125,13 @@ def update_driver_status(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(['POST'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_driver_location(request):
-    """Update driver's current location"""
+    """Get or update driver's current location"""
     if request.user.role != 'driver':
         return Response(
-            {'error': 'Only drivers can update location'},
+            {'error': 'Only drivers can access this endpoint'},
             status=status.HTTP_403_FORBIDDEN
         )
     
@@ -143,6 +143,17 @@ def update_driver_location(request):
             status=status.HTTP_404_NOT_FOUND
         )
     
+    if request.method == 'GET':
+        # Get current driver location
+        return Response({
+            'latitude': float(profile.current_latitude) if profile.current_latitude else None,
+            'longitude': float(profile.current_longitude) if profile.current_longitude else None,
+            'last_updated': profile.last_location_update,
+            'status': profile.status,
+            'vehicle_number': profile.vehicle_number
+        })
+    
+    # POST, PUT, or PATCH - Update location
     serializer = LocationUpdateSerializer(data=request.data)
     if serializer.is_valid():
         profile.current_latitude = serializer.validated_data['latitude']
@@ -152,8 +163,10 @@ def update_driver_location(request):
         
         return Response({
             'message': 'Location updated successfully',
-            'latitude': profile.current_latitude,
-            'longitude': profile.current_longitude
+            'latitude': float(profile.current_latitude),
+            'longitude': float(profile.current_longitude),
+            'last_updated': profile.last_location_update,
+            'status': profile.status
         })
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -164,7 +177,7 @@ def update_driver_location(request):
 def nearby_drivers_for_passenger(request):
     """
     Get nearby available drivers for passenger home screen map
-    Requires passenger's current location
+    Uses POST to keep location data secure in request body
     """
     if request.user.role != 'user':
         return Response(

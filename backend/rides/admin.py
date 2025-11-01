@@ -8,11 +8,11 @@ class UserAdmin(BaseUserAdmin):
     """Custom User admin"""
     list_display = ['username', 'email', 'role', 'phone_number', 'completed_rides', 'is_active']
     list_filter = ['role', 'is_staff', 'is_active']
-    search_fields = ['username', 'email', 'phone_number', 'google_id']
+    search_fields = ['username', 'email', 'phone_number']
     
     fieldsets = BaseUserAdmin.fieldsets + (
         ('Additional Info', {
-            'fields': ('google_id', 'profile_picture', 'role', 'phone_number', 'completed_rides')
+            'fields': ('profile_picture', 'role', 'phone_number', 'completed_rides')
         }),
     )
 
