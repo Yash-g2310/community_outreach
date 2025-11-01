@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-// import 'package:google_sign_in/google_sign_in.dart'; // Commented for OAuth bypass
 import 'erick_driver_page.dart';
-import 'home_page.dart'; // Import user home page
+import 'home_page.dart';
 import 'loading_overlay.dart';
+import 'signup_page.dart';
 
 void main() {
   runApp(const LoginScreenApp());
@@ -28,11 +28,16 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  bool _isLoading = false; // Add loading state
+  bool _isLoading = false;
 
-  // Google Sign-In instance (commented out for bypass)
-  // final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);  @override
+  // Text controllers for login form
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  @override
   void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -82,70 +87,83 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _handleGoogleSignIn() async {
-    print('=== GOOGLE SIGN IN ===');
-    print('Google Sign-In button pressed');
-    print('=====================');
+  // Handle login with username and password
+  void _handleLogin() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
 
-    // Show loading
+    if (username.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter both username and password'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
 
-    // Simulate authentication delay
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-
-      // Simulate user data (bypass OAuth)
-      const String mockEmail = "testuser@gmail.com";
-      const String mockDisplayName = "Test User";
-
-      print('=== SIMULATED USER DATA ===');
-      print('Email: $mockEmail');
-      print('Username: $mockDisplayName');
-      print('========================');
-
-      // Determine user role based on email
-      String userRole = _simulateServerResponse(mockEmail);
-
-      print('=== SERVER RESPONSE ===');
-      print('User Role: $userRole');
-      print('Email: $mockEmail');
-      print('Username: $mockDisplayName');
-      print('=====================');
-
-      // Send to server (simulated)
-      await sendToServer(
-        email: mockEmail,
-        username: mockDisplayName,
-        role: userRole,
-      );
-
+    try {
+      // TODO: Implement actual API call to Django backend
+      await _loginWithServer(username, password);
+    } catch (error) {
+      print('Login error: $error');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Welcome $mockDisplayName! Role: $userRole'),
-          backgroundColor: Colors.green,
+          content: Text('Login failed: ${error.toString()}'),
+          backgroundColor: Colors.red,
         ),
       );
-
-      // Navigate based on role
-      _navigateBasedOnRole(userRole, mockEmail);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
-  // Simulate server response based on email
-  String _simulateServerResponse(String email) {
-    // For testing purposes, determine role based on email
-    if (email.toLowerCase().contains('driver') ||
-        email.toLowerCase().contains('erick')) {
-      return 'driver';
-    } else {
-      return 'user';
-    }
+  // Simulate login API call (replace with actual Django API)
+  Future<void> _loginWithServer(String username, String password) async {
+    print('=== LOGIN REQUEST ===');
+    print('Username: $username');
+    print('Password: [hidden]');
+    print('====================');
+
+    // Simulate API delay
+    await Future.delayed(const Duration(seconds: 1));
+
+    // Simulate successful login
+    const String mockRole = "user"; // This would come from server response
+
+    print('=== LOGIN SUCCESS ===');
+    print('User Role: $mockRole');
+    print('====================');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Welcome back, $username!'),
+        backgroundColor: Colors.green,
+      ),
+    );
+
+    // Navigate based on role
+    _navigateBasedOnRole(mockRole, username);
+  }
+
+  // Navigate to signup page
+  void _navigateToSignup() {
+    print('=== NAVIGATION ===');
+    print('Navigating to Sign Up Page');
+    print('==================');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SignupPage()),
+    );
   }
 
   // Navigate to appropriate page based on user role
@@ -216,42 +234,135 @@ class _LoginScreenState extends State<LoginScreen> {
                     ],
                   ),
 
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 30),
 
-                  // Welcome message
+                  // Username field
                   const Text(
-                    "Sign in with your Google account to continue",
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.black87,
-                      fontWeight: FontWeight.w500,
+                    "Username",
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _usernameController,
+                    decoration: InputDecoration(
+                      hintText: "Enter your username",
+                      hintStyle: const TextStyle(color: Colors.black38),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
                     ),
-                    textAlign: TextAlign.center,
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Password field
+                  const Text(
+                    "Password",
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      hintText: "Enter your password",
+                      hintStyle: const TextStyle(color: Colors.black38),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.black12),
+                      ),
+                    ),
                   ),
 
                   const SizedBox(height: 30),
 
-                  // Google Sign-in button
+                  // Login button
                   SizedBox(
                     width: double.infinity,
                     height: 55,
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.g_mobiledata, size: 24),
-                      label: const Text(
-                        "Sign in with Google",
-                        style: TextStyle(
-                          color: Colors.black87,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _handleLogin,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF7A00),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
                         ),
                       ),
-                      onPressed: _isLoading ? null : _handleGoogleSignIn,
+                      child: const Text(
+                        "Log In",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Divider
+                  const Row(
+                    children: [
+                      Expanded(
+                        child: Divider(color: Colors.black26, thickness: 1),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 10),
+                        child: Text(
+                          "Or",
+                          style: TextStyle(color: Colors.black54),
+                        ),
+                      ),
+                      Expanded(
+                        child: Divider(color: Colors.black26, thickness: 1),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Sign up button
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: OutlinedButton(
+                      onPressed: _isLoading ? null : _navigateToSignup,
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.black12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),
                         backgroundColor: Colors.white,
+                      ),
+                      child: const Text(
+                        "Create New Account",
+                        style: TextStyle(
+                          color: Colors.black87,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),

@@ -64,7 +64,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
                   RotationTransition(
                     turns: _controller,
                     child: Image.asset(
-                      'assets/download16.jpeg', // Using available asset
+                      'assets/erick.png', // Using available asset
                       width: 80,
                       height: 80,
                     ),
