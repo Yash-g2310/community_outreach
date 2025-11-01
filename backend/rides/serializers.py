@@ -49,8 +49,8 @@ class RideRequestSerializer(serializers.ModelSerializer):
         model = RideRequest
         fields = ['id', 'passenger', 'driver', 'pickup_latitude', 'pickup_longitude',
                   'pickup_address', 'dropoff_latitude', 'dropoff_longitude', 
-                  'dropoff_address', 'status', 'broadcast_radius', 'requested_at',
-                  'accepted_at', 'started_at', 'completed_at', 'cancelled_at',
+                  'dropoff_address', 'number_of_passengers', 'status', 'broadcast_radius', 
+                  'requested_at', 'accepted_at', 'started_at', 'completed_at', 'cancelled_at',
                   'cancellation_reason']
         read_only_fields = ['id', 'passenger', 'driver', 'status', 'requested_at',
                            'accepted_at', 'started_at', 'completed_at', 'cancelled_at']
@@ -62,7 +62,7 @@ class RideRequestCreateSerializer(serializers.ModelSerializer):
         model = RideRequest
         fields = ['pickup_latitude', 'pickup_longitude', 'pickup_address',
                   'dropoff_latitude', 'dropoff_longitude', 'dropoff_address',
-                  'broadcast_radius']
+                  'number_of_passengers', 'broadcast_radius']
 
 
 class LocationUpdateSerializer(serializers.Serializer):

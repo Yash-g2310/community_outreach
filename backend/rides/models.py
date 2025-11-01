@@ -82,6 +82,9 @@ class RideRequest(models.Model):
     dropoff_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     dropoff_address = models.TextField(null=True, blank=True)
     
+    # Passenger count
+    number_of_passengers = models.IntegerField(default=1)
+    
     # Status & timing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
