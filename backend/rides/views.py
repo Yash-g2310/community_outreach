@@ -84,13 +84,13 @@ def driver_profile(request):
         return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
-@api_view(['POST'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_driver_status(request):
-    """Toggle driver availability status"""
+    """Get or update driver availability status"""
     if request.user.role != 'driver':
         return Response(
-            {'error': 'Only drivers can update status'},
+            {'error': 'Only drivers can access this endpoint'},
             status=status.HTTP_403_FORBIDDEN
         )
     
@@ -102,6 +102,16 @@ def update_driver_status(request):
             status=status.HTTP_404_NOT_FOUND
         )
     
+    if request.method == 'GET':
+        return Response({
+            'status': profile.status,
+            'vehicle_number': profile.vehicle_number,
+            'current_latitude': profile.current_latitude,
+            'current_longitude': profile.current_longitude,
+            'last_location_update': profile.last_location_update
+        })
+    
+    # PUT or PATCH request
     serializer = DriverStatusSerializer(data=request.data)
     if serializer.is_valid():
         profile.status = serializer.validated_data['status']
