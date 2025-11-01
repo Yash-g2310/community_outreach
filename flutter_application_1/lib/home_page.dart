@@ -88,11 +88,54 @@ class _UserMapScreenState extends State<UserMapScreen> {
     }
   }
 
+  // Show logout confirmation dialog
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Logout'),
+          content: const Text('Are you sure you want to logout?'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Close dialog
+              },
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                print('=== LOGOUT ===');
+                print('User logged out');
+                print('==============');
+
+                Navigator.of(context).pop(); // Close dialog
+
+                // Navigate back to login page and clear all previous routes
+                Navigator.of(
+                  context,
+                ).pushNamedAndRemoveUntil('/', (Route<dynamic> route) => false);
+              },
+              child: const Text('Logout', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('E-Rickshaw User Page'),
+        leading: IconButton(
+          onPressed: () {
+            _showLogoutDialog(context);
+          },
+          icon: const Icon(Icons.logout, color: Colors.red),
+          tooltip: 'Logout',
+        ),
         actions: [
           // Profile icon button
           IconButton(

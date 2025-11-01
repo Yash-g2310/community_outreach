@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'erick_driver_page.dart';
 import 'home_page.dart';
 import 'loading_overlay.dart';
@@ -41,52 +43,6 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // Function to send user data to your server
-  Future<void> sendToServer({
-    required String email,
-    required String username,
-    required String role,
-  }) async {
-    print('=== SENDING TO SERVER ===');
-    print('Preparing to send data to server:');
-    print('Email: $email');
-    print('Username: $username');
-    print('Role: $role');
-    print('========================');
-
-    try {
-      // TODO: Replace with your actual server endpoint
-      // Example HTTP POST request:
-      /*
-      final response = await http.post(
-        Uri.parse('https://your-server.com/api/auth/google'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': email,
-          'username': username,
-          'role': role,
-          'login_method': 'google_oauth',
-          'timestamp': DateTime.now().toIso8601String(),
-        }),
-      );
-      
-      if (response.statusCode == 200) {
-        print('Successfully sent data to server');
-        return jsonDecode(response.body);
-      } else {
-        throw Exception('Server error: ${response.statusCode}');
-      }
-      */
-
-      // For now, just simulate server delay
-      await Future.delayed(const Duration(milliseconds: 500));
-      print('✅ Data successfully sent to server (simulated)');
-    } catch (error) {
-      print('❌ Error sending data to server: $error');
-      rethrow;
-    }
-  }
-
   // Handle login with username and password
   void _handleLogin() async {
     final username = _usernameController.text.trim();
@@ -126,32 +82,82 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  // Simulate login API call (replace with actual Django API)
+  // Login with Django API
   Future<void> _loginWithServer(String username, String password) async {
     print('=== LOGIN REQUEST ===');
     print('Username: $username');
     print('Password: [hidden]');
+    print('API Endpoint: http://localhost:8000/api/auth/login/');
     print('====================');
 
-    // Simulate API delay
-    await Future.delayed(const Duration(seconds: 1));
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost:8000/api/auth/login/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password}),
+      );
 
-    // Simulate successful login
-    const String mockRole = "user"; // This would come from server response
+      print('=== API RESPONSE ===');
+      print('Status Code: ${response.statusCode}');
+      print('Response Body: ${response.body}');
+      print('===================');
 
-    print('=== LOGIN SUCCESS ===');
-    print('User Role: $mockRole');
-    print('====================');
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Welcome back, $username!'),
-        backgroundColor: Colors.green,
-      ),
-    );
+        // Extract user data from API response
+        final userData = responseData['user'];
+        final userRole = userData['role'];
+        final userName = userData['username'];
+        final userEmail = userData['email'];
+        final tokens = responseData['tokens'];
 
-    // Navigate based on role
-    _navigateBasedOnRole(mockRole, username);
+        print('=== LOGIN SUCCESS ===');
+        print('User Role: $userRole');
+        print('User Name: $userName');
+        print('User Email: $userEmail');
+        print('Access Token: ${tokens['access'].substring(0, 20)}...');
+        print('====================');
+
+        // Show success message
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Welcome back, $userName!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+
+          // Navigate based on role from server response
+          _navigateBasedOnRole(userRole, userName, userEmail);
+        }
+      } else {
+        // Handle login failure
+        final responseData = jsonDecode(response.body);
+        final errorMessage = responseData['error'] ?? 'Login failed';
+
+        print('=== LOGIN FAILED ===');
+        print('Error: $errorMessage');
+        print('===================');
+
+        throw Exception(errorMessage);
+      }
+    } catch (error) {
+      print('=== API ERROR ===');
+      print('Error Type: ${error.runtimeType}');
+      print('Error Message: $error');
+      print('=================');
+
+      // Re-throw with user-friendly message
+      if (error.toString().contains('Connection refused') ||
+          error.toString().contains('Failed host lookup')) {
+        throw Exception(
+          'Cannot connect to server. Please ensure the Django server is running.',
+        );
+      } else {
+        throw Exception(error.toString().replaceAll('Exception: ', ''));
+      }
+    }
   }
 
   // Navigate to signup page
@@ -167,9 +173,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Navigate to appropriate page based on user role
-  void _navigateBasedOnRole(String role, String email) {
+  void _navigateBasedOnRole(String role, String userName, [String? userEmail]) {
     print('=== NAVIGATION ===');
     print('Navigating to ${role.toUpperCase()} dashboard');
+    print('User: $userName');
+    if (userEmail != null) print('Email: $userEmail');
     print('==================');
 
     Widget destinationPage;

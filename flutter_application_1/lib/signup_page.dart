@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 
@@ -114,7 +116,7 @@ class _SignupPageState extends State<SignupPage> {
     );
   }
 
-  // Simulate signup API call (replace with actual Django API)
+  // Signup with Django API
   Future<void> _signupWithServer() async {
     print('=== SIGNUP REQUEST ===');
     print('Username: ${_usernameController.text}');
@@ -122,24 +124,121 @@ class _SignupPageState extends State<SignupPage> {
     print('Role: $_selectedRole');
     print('Phone: ${_phoneController.text}');
     if (_selectedRole == 'driver') {
-      print('E-Rick No: ${_erickNoController.text}');
+      print('Vehicle Number: ${_erickNoController.text}');
     }
     print('Profile Image: ${_profileImage != null ? 'Selected' : 'None'}');
+    print('API Endpoint: http://localhost:8000/api/auth/register/');
     print('=====================');
 
-    // Simulate API delay
-    await Future.delayed(const Duration(seconds: 2));
+    try {
+      // Prepare request data
+      Map<String, dynamic> requestData = {
+        'username': _usernameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'password': _passwordController.text.trim(),
+        'role': _selectedRole,
+        'phone_number': _phoneController.text.trim(),
+      };
 
-    // Simulate successful signup
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Account created successfully! Please log in.'),
-        backgroundColor: Colors.green,
-      ),
-    );
+      // Add vehicle number for drivers
+      if (_selectedRole == 'driver') {
+        requestData['vehicle_number'] = _erickNoController.text.trim();
+      }
 
-    // Navigate back to login page
-    Navigator.pop(context);
+      final response = await http.post(
+        Uri.parse('http://localhost:8000/api/auth/register/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(requestData),
+      );
+
+      print('=== API RESPONSE ===');
+      print('Status Code: ${response.statusCode}');
+      print('Response Body: ${response.body}');
+      print('===================');
+
+      if (response.statusCode == 201) {
+        final responseData = jsonDecode(response.body);
+
+        // Extract user data from API response
+        final userData = responseData['user'];
+        final userName = userData['username'];
+        final userRole = userData['role'];
+        final tokens = responseData['tokens'];
+
+        print('=== SIGNUP SUCCESS ===');
+        print('User Name: $userName');
+        print('User Role: $userRole');
+        print('User ID: ${userData['id']}');
+        print('Access Token: ${tokens['access'].substring(0, 20)}...');
+        print('======================');
+
+        // Show success message
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Welcome $userName! Account created successfully. Please log in.',
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+
+          // Navigate back to login page
+          Navigator.pop(context);
+        }
+      } else if (response.statusCode == 400) {
+        // Handle validation errors
+        final responseData = jsonDecode(response.body);
+
+        print('=== VALIDATION ERRORS ===');
+        print('Errors: $responseData');
+        print('========================');
+
+        // Extract and show specific error messages
+        String errorMessage = 'Signup failed:\n';
+
+        if (responseData is Map<String, dynamic>) {
+          responseData.forEach((field, errors) {
+            if (errors is List) {
+              errorMessage +=
+                  '• ${field.replaceAll('_', ' ')}: ${errors.join(', ')}\n';
+            } else {
+              errorMessage += '• ${field.replaceAll('_', ' ')}: $errors\n';
+            }
+          });
+        } else {
+          errorMessage += responseData.toString();
+        }
+
+        throw Exception(errorMessage.trim());
+      } else {
+        // Handle other errors
+        final responseData = jsonDecode(response.body);
+        final errorMessage = responseData['error'] ?? 'Signup failed';
+
+        print('=== SIGNUP FAILED ===');
+        print('Error: $errorMessage');
+        print('====================');
+
+        throw Exception(errorMessage);
+      }
+    } catch (error) {
+      print('=== API ERROR ===');
+      print('Error Type: ${error.runtimeType}');
+      print('Error Message: $error');
+      print('=================');
+
+      // Re-throw with user-friendly message
+      if (error.toString().contains('Connection refused') ||
+          error.toString().contains('Failed host lookup')) {
+        throw Exception(
+          'Cannot connect to server. Please ensure the Django server is running.',
+        );
+      } else {
+        throw Exception(error.toString().replaceAll('Exception: ', ''));
+      }
+    }
   }
 
   @override
