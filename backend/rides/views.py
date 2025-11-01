@@ -159,6 +159,65 @@ def update_driver_location(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def nearby_drivers_for_passenger(request):
+    """
+    Get nearby available drivers for passenger home screen map
+    Requires passenger's current location
+    """
+    if request.user.role != 'user':
+        return Response(
+            {'error': 'Only passengers can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    serializer = LocationUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    passenger_lat = serializer.validated_data['latitude']
+    passenger_lon = serializer.validated_data['longitude']
+    
+    # Default search radius: 5km
+    search_radius = request.data.get('radius', 5000)
+    
+    # Get all available drivers with location
+    available_drivers = DriverProfile.objects.filter(
+        status='available',
+        current_latitude__isnull=False,
+        current_longitude__isnull=False
+    ).select_related('user')
+    
+    # Calculate distance and filter
+    nearby = []
+    for driver in available_drivers:
+        distance = calculate_distance(
+            passenger_lat, passenger_lon,
+            driver.current_latitude, driver.current_longitude
+        )
+        
+        if distance <= search_radius:
+            nearby.append({
+                'driver_id': driver.id,
+                'username': driver.user.username,
+                'vehicle_number': driver.vehicle_number,
+                'latitude': float(driver.current_latitude),
+                'longitude': float(driver.current_longitude),
+                'distance_meters': round(distance, 2),
+                'last_updated': driver.last_location_update
+            })
+    
+    # Sort by distance
+    nearby.sort(key=lambda x: x['distance_meters'])
+    
+    return Response({
+        'count': len(nearby),
+        'drivers': nearby,
+        'search_radius_meters': search_radius
+    })
+
+
 # ==================== Passenger Ride APIs ====================
 
 @api_view(['POST'])

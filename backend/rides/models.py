@@ -4,19 +4,16 @@ from django.utils import timezone
 
 
 class User(AbstractUser):
-    """Extended user model with Google OAuth support and role selection"""
+    """Extended user model with role selection"""
     ROLE_CHOICES = [
         ('user', 'Passenger'),
         ('driver', 'E-Rickshaw Owner'),
     ]
     
-    # Google OAuth fields
-    google_id = models.CharField(max_length=255, unique=True, null=True, blank=True)
-    profile_picture = models.URLField(max_length=500, null=True, blank=True)
-    
     # Role & basic info
     role = models.CharField(max_length=10, choices=ROLE_CHOICES)
-    phone_number = models.CharField(max_length=15, null=True, blank=True)
+    phone_number = models.CharField(max_length=15)
+    profile_picture = models.URLField(max_length=500, null=True, blank=True)
     
     # Ride statistics (common for both user and driver)
     completed_rides = models.IntegerField(default=0)

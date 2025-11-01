@@ -13,9 +13,9 @@ class RegisterSerializer(serializers.Serializer):
     """Serializer for user registration"""
     username = serializers.CharField()
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, min_length=3)
     role = serializers.ChoiceField(choices=['user', 'driver'])
-    phone_number = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=True)  # Now required
     vehicle_number = serializers.CharField(required=False, allow_blank=True)
     
     def validate_username(self, value):
@@ -26,6 +26,11 @@ class RegisterSerializer(serializers.Serializer):
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("Email already exists")
+        return value
+    
+    def validate_phone_number(self, value):
+        if not value:
+            raise serializers.ValidationError("Phone number is required")
         return value
     
     def validate(self, data):
@@ -44,7 +49,7 @@ class RegisterSerializer(serializers.Serializer):
             email=validated_data['email'],
             password=validated_data['password'],
             role=validated_data['role'],
-            phone_number=validated_data.get('phone_number', '')
+            phone_number=validated_data['phone_number']
         )
         
         # Create driver profile if role is driver
