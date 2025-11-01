@@ -1,0 +1,49 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+pip-env/
+build/venv/
+
+# Packaging / distribution
+dist/
+build/
+*.egg-info/
+pip-wheel-metadata/
+
+# Django files
+# Ignore SQLite DB by default (remove if you want to store it in repo)
+db.sqlite3
+*.sqlite3
+
+# Uploaded media and collected static files
+media/
+staticfiles/
+
+# Local settings / secrets / env
+local_settings.py
+.env
+.env.*
+secrets.json
+
+# Migrations: keep migration source files tracked, ignore compiled/misc inside them
+**/migrations/__pycache__/
+**/migrations/*.pyc
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

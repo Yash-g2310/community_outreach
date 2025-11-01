@@ -1,45 +1,63 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
+# Misc
 .DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+Thumbs.db
+*.log
+*.tmp
+*.swp
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
-
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# Dart / Flutter tooling
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
-.pub-cache/
+.packages
 .pub/
-/build/
-/coverage/
+.pub-cache/
+build/
+coverage/
+**/doc/api/
 
-# Symbolication related
-app.*.symbols
+# Keep pubspec.lock for app reproducibility
+!pubspec.lock
 
-# Obfuscation related
-app.*.map.json
+# Android
+android/.gradle/
+android/local.properties
+android/**/build/
+android/**/captures/
+android/gradle/wrapper/gradle-wrapper.jar
+android/key.properties
+android/*.jks
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+# iOS
+ios/Pods/
+ios/Runner.xcworkspace/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/.last_build_id
+ios/Flutter/Flutter.podspec
+
+# macOS, Windows, Linux build outputs
+macos/Build/
+windows/runner/Release/
+linux/flutter/ephemeral/
+
+# Generated plugin registrant files
+**/GeneratedPluginRegistrant.*
+
+# IDE / editor
+.idea/
+*.iml
+
+# VSCode: ignore workspace but keep useful tracked files
+.vscode/
+!.vscode/launch.json
+!.vscode/settings.json
+
+# Keep source and assets tracked
+!lib/**
+!assets/**
+
+# Optional: ignore node artifacts if present
+node_modules/
+package-lock.json
+yarn.lock
