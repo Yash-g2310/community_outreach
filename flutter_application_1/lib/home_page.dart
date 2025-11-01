@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'profile.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,7 +91,37 @@ class _UserMapScreenState extends State<UserMapScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('E-Rickshaw User Page')),
+      appBar: AppBar(
+        title: const Text('E-Rickshaw User Page'),
+        actions: [
+          // Profile icon button
+          IconButton(
+            onPressed: () {
+              print('=== NAVIGATION ===');
+              print('Navigating to User Profile');
+              print('==================');
+
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProfilePage(
+                    userType: 'User',
+                    userName: 'E-Rick User',
+                    userEmail: 'user@erick.com',
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(
+              Icons.account_circle,
+              size: 28,
+              color: Colors.blueGrey,
+            ),
+            tooltip: 'User Profile',
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: _currentPosition == null
           ? const Center(child: CircularProgressIndicator())
           : Column(
@@ -161,13 +192,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
                         ElevatedButton.icon(
                           onPressed: () {
                             // 👇 Print all info to console
-                            print('📍 Pickup: ${_pickupController.text}');
-                            print('🏁 Drop: ${_dropController.text}');
+                            print('Pickup: ${_pickupController.text}');
+                            print('Drop: ${_dropController.text}');
+                            print('Passengers: ${_passengerController.text}');
                             print(
-                              '👥 Passengers: ${_passengerController.text}',
-                            );
-                            print(
-                              '🌍 Current Location: ${_currentPosition?.latitude}, ${_currentPosition?.longitude}',
+                              'Current Location: ${_currentPosition?.latitude}, ${_currentPosition?.longitude}',
                             );
 
                             ScaffoldMessenger.of(context).showSnackBar(

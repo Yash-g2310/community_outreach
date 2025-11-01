@@ -22,7 +22,16 @@ class ProfileApp extends StatelessWidget {
 }
 
 class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+  final String userType;
+  final String userName;
+  final String userEmail;
+
+  const ProfilePage({
+    super.key,
+    this.userType = 'User',
+    this.userName = 'E-Rick User',
+    this.userEmail = 'user@email.com',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -50,7 +59,9 @@ class ProfilePage extends StatelessWidget {
                     IconButton(
                       onPressed: () {
                         print('=== NAVIGATION ===');
-                        print('Going back from Profile to Driver Dashboard');
+                        print(
+                          'Going back from Profile to ${userType == 'Driver' ? 'Driver Dashboard' : 'User Home Page'}',
+                        );
                         print('==================');
                         Navigator.pop(context);
                       },
@@ -59,11 +70,13 @@ class ProfilePage extends StatelessWidget {
                         color: Colors.white,
                       ),
                     ),
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        'Driver Profile',
+                        userType == 'Driver'
+                            ? 'Driver Profile'
+                            : 'User Profile',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -81,9 +94,9 @@ class ProfilePage extends StatelessWidget {
                   ), // Using available asset
                 ),
                 const SizedBox(height: 10),
-                const Text(
-                  "E-Rick Driver", // Updated for E-Rick context
-                  style: TextStyle(
+                Text(
+                  userName,
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -185,8 +198,8 @@ class ProfilePage extends StatelessWidget {
                             ),
                             SizedBox(height: 4),
                             Text(
-                              "driver@erick.com", // Updated for E-Rick context
-                              style: TextStyle(
+                              userEmail,
+                              style: const TextStyle(
                                 color: Colors.cyan, // Updated color
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,

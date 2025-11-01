@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+// import 'package:google_sign_in/google_sign_in.dart'; // Commented for OAuth bypass
 import 'erick_driver_page.dart';
 import 'home_page.dart'; // Import user home page
 import 'loading_overlay.dart';
@@ -27,72 +28,112 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _emailController = TextEditingController();
   bool _isLoading = false; // Add loading state
 
-  @override
+  // Google Sign-In instance (commented out for bypass)
+  // final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: ['email', 'profile']);  @override
   void dispose() {
-    _emailController.dispose();
     super.dispose();
   }
 
-  void _handleConnect() async {
-    // Make async for loading simulation
-    final email = _emailController.text.trim();
-
-    // Print data to console for verification
-    print('=== LOGIN DATA ===');
+  // Function to send user data to your server
+  Future<void> sendToServer({
+    required String email,
+    required String username,
+    required String role,
+  }) async {
+    print('=== SENDING TO SERVER ===');
+    print('Preparing to send data to server:');
     print('Email: $email');
-    print('Email length: ${email.length}');
-    print('Is email empty: ${email.isEmpty}');
-    print('==================');
+    print('Username: $username');
+    print('Role: $role');
+    print('========================');
 
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter your email'),
-          backgroundColor: Colors.red,
-        ),
+    try {
+      // TODO: Replace with your actual server endpoint
+      // Example HTTP POST request:
+      /*
+      final response = await http.post(
+        Uri.parse('https://your-server.com/api/auth/google'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'email': email,
+          'username': username,
+          'role': role,
+          'login_method': 'google_oauth',
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
       );
-      return;
-    }
+      
+      if (response.statusCode == 200) {
+        print('Successfully sent data to server');
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Server error: ${response.statusCode}');
+      }
+      */
 
-    // Show loading overlay
+      // For now, just simulate server delay
+      await Future.delayed(const Duration(milliseconds: 500));
+      print('✅ Data successfully sent to server (simulated)');
+    } catch (error) {
+      print('❌ Error sending data to server: $error');
+      rethrow;
+    }
+  }
+
+  void _handleGoogleSignIn() async {
+    print('=== GOOGLE SIGN IN ===');
+    print('Google Sign-In button pressed');
+    print('=====================');
+
+    // Show loading
     setState(() {
       _isLoading = true;
     });
 
-    print('=== LOADING ===');
-    print('Simulating server authentication...');
-    print('================');
+    // Simulate authentication delay
+    await Future.delayed(const Duration(seconds: 1));
 
-    // Simulate server authentication delay
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Simulate server response with role based on email
-    String userRole = _simulateServerResponse(email);
-
-    // Hide loading overlay
     if (mounted) {
       setState(() {
         _isLoading = false;
       });
 
+      // Simulate user data (bypass OAuth)
+      const String mockEmail = "testuser@gmail.com";
+      const String mockDisplayName = "Test User";
+
+      print('=== SIMULATED USER DATA ===');
+      print('Email: $mockEmail');
+      print('Username: $mockDisplayName');
+      print('========================');
+
+      // Determine user role based on email
+      String userRole = _simulateServerResponse(mockEmail);
+
       print('=== SERVER RESPONSE ===');
       print('User Role: $userRole');
-      print('Email: $email');
+      print('Email: $mockEmail');
+      print('Username: $mockDisplayName');
       print('=====================');
 
-      // TODO: Send data to server here
+      // Send to server (simulated)
+      await sendToServer(
+        email: mockEmail,
+        username: mockDisplayName,
+        role: userRole,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Login successful! Role: $userRole'),
+          content: Text('Welcome $mockDisplayName! Role: $userRole'),
           backgroundColor: Colors.green,
         ),
       );
 
       // Navigate based on role
-      _navigateBasedOnRole(userRole, email);
+      _navigateBasedOnRole(userRole, mockEmail);
     }
   }
 
@@ -128,51 +169,8 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _handleGoogleSignIn() async {
-    print('=== GOOGLE SIGN IN ===');
-    print('Google Sign-In button pressed');
-    print('=====================');
-
-    // Show loading
-    setState(() {
-      _isLoading = true;
-    });
-
-    // Simulate Google Sign-In delay
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-
-      // For Google Sign-In, simulate getting user role from Google profile
-      // In real implementation, you'd get this from Google user data
-      String mockGoogleEmail = "user@gmail.com"; // Simulate user role
-      String userRole = _simulateServerResponse(mockGoogleEmail);
-
-      print('=== GOOGLE SERVER RESPONSE ===');
-      print('Google User Role: $userRole');
-      print('============================');
-
-      // TODO: Implement Google Sign-In authentication
-      // For now, simulate successful Google sign-in
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Google Sign-In successful! Role: $userRole'),
-          backgroundColor: Colors.blue,
-        ),
-      );
-
-      // Navigate based on role
-      _navigateBasedOnRole(userRole, mockGoogleEmail);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final orangeColor = const Color(0xFFFF7A00);
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F8F8),
       body: Stack(
@@ -218,92 +216,20 @@ class _LoginScreenState extends State<LoginScreen> {
                     ],
                   ),
 
+                  const SizedBox(height: 40),
+
+                  // Welcome message
+                  const Text(
+                    "Sign in with your Google account to continue",
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.black87,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+
                   const SizedBox(height: 30),
-
-                  const Text(
-                    "Email",
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-                  ),
-                  const SizedBox(height: 8),
-
-                  TextField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    onChanged: (value) {
-                      // Print data as user types (optional)
-                      print('Email input changed: $value');
-                    },
-                    decoration: InputDecoration(
-                      hintText: "Your email",
-                      hintStyle: const TextStyle(color: Colors.black38),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: Colors.black12),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: Colors.black12),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 10),
-                  const Text(
-                    "We will send you an e-mail with a login link.",
-                    style: TextStyle(fontSize: 13, color: Colors.black54),
-                  ),
-
-                  const SizedBox(height: 25),
-
-                  SizedBox(
-                    width: double.infinity,
-                    height: 55,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _handleConnect,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: orangeColor,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                      ),
-                      child: const Text(
-                        "Connect",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 25),
-
-                  const Row(
-                    children: [
-                      Expanded(
-                        child: Divider(color: Colors.black26, thickness: 1),
-                      ),
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: Text(
-                          "Or",
-                          style: TextStyle(color: Colors.black54),
-                        ),
-                      ),
-                      Expanded(
-                        child: Divider(color: Colors.black26, thickness: 1),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 25),
 
                   // Google Sign-in button
                   SizedBox(
