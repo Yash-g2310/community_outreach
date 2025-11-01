@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'erick_driver_page.dart';
-import 'home_page.dart';
+import 'user_page.dart';
 import 'loading_overlay.dart';
 import 'signup_page.dart';
 
@@ -129,7 +129,7 @@ class _LoginScreenState extends State<LoginScreen> {
           );
 
           // Navigate based on role from server response
-          _navigateBasedOnRole(userRole, userName, userEmail);
+          _navigateBasedOnRole(userRole, userName, userEmail, tokens['access']);
         }
       } else {
         // Handle login failure
@@ -173,7 +173,12 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Navigate to appropriate page based on user role
-  void _navigateBasedOnRole(String role, String userName, [String? userEmail]) {
+  void _navigateBasedOnRole(
+    String role,
+    String userName, [
+    String? userEmail,
+    String? accessToken,
+  ]) {
     print('=== NAVIGATION ===');
     print('Navigating to ${role.toUpperCase()} dashboard');
     print('User: $userName');
@@ -183,9 +188,17 @@ class _LoginScreenState extends State<LoginScreen> {
     Widget destinationPage;
 
     if (role == 'driver') {
-      destinationPage = const DriverPage();
+      destinationPage = DriverPage(
+        jwtToken: accessToken,
+        userData: {'username': userName, 'email': userEmail, 'role': role},
+      );
     } else {
-      destinationPage = const UserMapScreen(); // Navigate to user home page
+      destinationPage = UserMapScreen(
+        userName: userName,
+        userEmail: userEmail ?? '',
+        userRole: role,
+        accessToken: accessToken,
+      ); // Navigate to user home page with user data
     }
 
     // Replace current screen (so user can't go back to login)

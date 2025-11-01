@@ -38,7 +38,18 @@ class UserHomePage extends StatelessWidget {
 }
 
 class UserMapScreen extends StatefulWidget {
-  const UserMapScreen({super.key});
+  final String? userName;
+  final String? userEmail;
+  final String? userRole;
+  final String? accessToken;
+
+  const UserMapScreen({
+    super.key,
+    this.userName,
+    this.userEmail,
+    this.userRole,
+    this.accessToken,
+  });
 
   @override
   State<UserMapScreen> createState() => _UserMapScreenState();
@@ -147,10 +158,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => const ProfilePage(
-                    userType: 'User',
-                    userName: 'E-Rick User',
-                    userEmail: 'user@erick.com',
+                  builder: (context) => ProfilePage(
+                    userType: widget.userRole?.capitalize() ?? 'User',
+                    userName: widget.userName ?? 'E-Rick User',
+                    userEmail: widget.userEmail ?? 'user@erick.com',
+                    accessToken: widget.accessToken,
                   ),
                 ),
               );

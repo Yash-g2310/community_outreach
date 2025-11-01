@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'profile.dart';
 // If you plan to show a map, later add:
 // import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -8,19 +10,25 @@ void main() {
 }
 
 class ERickDriverApp extends StatelessWidget {
-  const ERickDriverApp({super.key});
+  final String? jwtToken;
+  final Map<String, dynamic>? userData;
+
+  const ERickDriverApp({super.key, this.jwtToken, this.userData});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: DriverPage(),
+      home: DriverPage(jwtToken: jwtToken, userData: userData),
     );
   }
 }
 
 class DriverPage extends StatefulWidget {
-  const DriverPage({super.key});
+  final String? jwtToken;
+  final Map<String, dynamic>? userData;
+
+  const DriverPage({super.key, this.jwtToken, this.userData});
 
   @override
   State<DriverPage> createState() => _DriverPageState();
@@ -28,13 +36,231 @@ class DriverPage extends StatefulWidget {
 
 class _DriverPageState extends State<DriverPage> {
   bool isActive = true;
+  bool isLoading = false;
+  String? errorMessage;
+  Map<String, dynamic>? driverProfile;
 
-  List<Map<String, dynamic>> notifications = [
-    {'id': 1, 'start': 'Sector 12, Noida', 'end': 'Atta Market', 'people': 2},
-    {'id': 2, 'start': 'Kailash Colony', 'end': 'Lajpat Nagar', 'people': 3},
-    {'id': 3, 'start': 'Rajiv Chowk', 'end': 'Connaught Place', 'people': 1},
-    {'id': 4, 'start': 'Vaishali', 'end': 'Indirapuram', 'people': 4},
-  ];
+  // API Configuration
+  static const String baseUrl = 'http://localhost:8000';
+
+  List<Map<String, dynamic>> notifications = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDriverData();
+  }
+
+  Future<void> _loadDriverData() async {
+    if (widget.jwtToken == null) {
+      setState(() {
+        errorMessage = 'No authentication token found';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      // Load driver profile and nearby rides
+      await Future.wait([_fetchDriverProfile(), _fetchNearbyRides()]);
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Error loading driver data: $e';
+      });
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _fetchDriverProfile() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/rides/driver/profile/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          driverProfile = data;
+          // Update isActive based on driver status
+          isActive = data['status'] == 'available';
+        });
+      } else {
+        throw Exception(
+          'Failed to load driver profile: ${response.statusCode}',
+        );
+      }
+    } catch (e) {
+      print('Driver profile error: $e');
+      throw e;
+    }
+  }
+
+  Future<void> _fetchNearbyRides() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/rides/driver/nearby-rides/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> ridesData = data['rides'] ?? [];
+
+        setState(() {
+          notifications = ridesData.map<Map<String, dynamic>>((ride) {
+            return {
+              'id': ride['id'],
+              'start': ride['pickup_address'] ?? 'Unknown pickup',
+              'end': ride['dropoff_address'] ?? 'Unknown destination',
+              'people': ride['number_of_passengers'] ?? 1,
+              'distance': ride['distance_from_driver'] ?? 0,
+              'passenger_name': ride['passenger']?['username'] ?? 'Unknown',
+              'passenger_phone': ride['passenger']?['phone_number'] ?? '',
+              'pickup_lat': ride['pickup_latitude'],
+              'pickup_lng': ride['pickup_longitude'],
+              'dropoff_lat': ride['dropoff_latitude'],
+              'dropoff_lng': ride['dropoff_longitude'],
+              'requested_at': ride['requested_at'],
+            };
+          }).toList();
+        });
+      } else if (response.statusCode == 400) {
+        // Driver not available or no location
+        setState(() {
+          notifications = [];
+        });
+      } else {
+        throw Exception('Failed to load nearby rides: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Nearby rides error: $e');
+      // Don't throw here, just set empty notifications
+      setState(() {
+        notifications = [];
+      });
+    }
+  }
+
+  Future<void> _updateDriverStatus(bool active) async {
+    if (widget.jwtToken == null) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.patch(
+        Uri.parse('$baseUrl/api/rides/driver/status/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'status': active ? 'available' : 'offline',
+          'current_latitude': 28.5355, // Default Delhi coordinates
+          'current_longitude': 77.3910,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        setState(() {
+          isActive = active;
+        });
+
+        // Refresh nearby rides when status changes
+        if (active) {
+          await _fetchNearbyRides();
+        } else {
+          setState(() {
+            notifications = [];
+          });
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              active
+                  ? 'You are now available for rides'
+                  : 'You are now offline',
+            ),
+            backgroundColor: active ? Colors.green : Colors.orange,
+          ),
+        );
+      } else {
+        throw Exception('Failed to update status: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating status: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _acceptRide(int rideId) async {
+    if (widget.jwtToken == null) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/$rideId/accept/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        // Remove the accepted ride from notifications
+        setState(() {
+          notifications.removeWhere((notif) => notif['id'] == rideId);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ride accepted successfully! ✅'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        throw Exception('Failed to accept ride: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error accepting ride: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
 
   void _showBottomSheet(Map<String, dynamic> notif) {
     showModalBottomSheet(
@@ -53,31 +279,53 @@ class _DriverPageState extends State<DriverPage> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-              Text("Start Location: ${notif['start']}"),
-              Text("End Location: ${notif['end']}"),
-              Text("No. of People: ${notif['people']}"),
+
+              // Ride details with real API data
+              _buildDetailRow(
+                "Passenger:",
+                notif['passenger_name'] ?? 'Unknown',
+              ),
+              _buildDetailRow("Phone:", notif['passenger_phone'] ?? ''),
+              _buildDetailRow("Pickup:", notif['start']),
+              _buildDetailRow("Drop-off:", notif['end']),
+              _buildDetailRow("Passengers:", "${notif['people']}"),
+              _buildDetailRow("Distance:", "${notif['distance']}m away"),
+
               const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  // Accept → navigate to assignment page with data
+                  // Accept button with real API call
                   ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      // TODO: Call your backend accept API first; if success, navigate.
-                      // For now, directly navigate to assignment page
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => DriverAssignmentPage(
-                            requestId: notif['id'] as int,
-                            pickupLabel: notif['start'] as String,
-                            dropLabel: notif['end'] as String,
-                            pax: notif['people'] as int,
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: isLoading
+                        ? null
+                        : () async {
+                            Navigator.pop(context);
+                            await _acceptRide(notif['id'] as int);
+
+                            // Navigate to assignment page with real data
+                            if (mounted) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DriverAssignmentPage(
+                                    requestId: notif['id'] as int,
+                                    pickupLabel: notif['start'] as String,
+                                    dropLabel: notif['end'] as String,
+                                    pax: notif['people'] as int,
+                                    passengerName:
+                                        notif['passenger_name'] as String,
+                                    passengerPhone:
+                                        notif['passenger_phone'] as String,
+                                    pickupLat: notif['pickup_lat'],
+                                    pickupLng: notif['pickup_lng'],
+                                    dropoffLat: notif['dropoff_lat'],
+                                    dropoffLng: notif['dropoff_lng'],
+                                  ),
+                                ),
+                              );
+                            }
+                          },
                     icon: const Icon(Icons.check_circle, color: Colors.white),
                     label: const Text("Accept"),
                     style: ElevatedButton.styleFrom(
@@ -85,20 +333,22 @@ class _DriverPageState extends State<DriverPage> {
                     ),
                   ),
                   ElevatedButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        notifications.removeWhere(
-                          (element) => element['id'] == notif['id'],
-                        );
-                      });
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Ride Declined ❌"),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
+                    onPressed: isLoading
+                        ? null
+                        : () {
+                            setState(() {
+                              notifications.removeWhere(
+                                (element) => element['id'] == notif['id'],
+                              );
+                            });
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("Ride Declined ❌"),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          },
                     icon: const Icon(Icons.cancel, color: Colors.white),
                     label: const Text("Decline"),
                     style: ElevatedButton.styleFrom(
@@ -112,6 +362,25 @@ class _DriverPageState extends State<DriverPage> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
     );
   }
 
@@ -207,23 +476,67 @@ class _DriverPageState extends State<DriverPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Other details of the driver',
-                      style: TextStyle(color: Colors.white, fontSize: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (driverProfile != null) ...[
+                          Text(
+                            'Driver: ${driverProfile!['user']['username']}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Vehicle: ${driverProfile!['vehicle_number']}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            'Rides: ${driverProfile!['user']['completed_rides']}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ] else ...[
+                          const Text(
+                            'Loading driver details...',
+                            style: TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   Container(
                     color: Colors.orange,
                     width: 100,
                     height: 80,
-                    child: const Center(
-                      child: Text(
-                        'Photo\nof\ndriver',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
+                    child: driverProfile?['user']['profile_picture'] != null
+                        ? Image.network(
+                            driverProfile!['user']['profile_picture'],
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Center(
+                                child: Text(
+                                  'Photo\nof\ndriver',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              );
+                            },
+                          )
+                        : const Center(
+                            child: Text(
+                              'Photo\nof\ndriver',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -231,14 +544,17 @@ class _DriverPageState extends State<DriverPage> {
 
             const SizedBox(height: 10),
 
-            // Active / Inactive buttons
+            // Active / Inactive buttons with loading state
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ElevatedButton.icon(
-                  onPressed: () => setState(() => isActive = true),
-                  icon: const Icon(Icons.circle, color: Colors.green),
-                  label: const Text('Active'),
+                  onPressed: isLoading ? null : () => _updateDriverStatus(true),
+                  icon: Icon(
+                    Icons.circle,
+                    color: isLoading ? Colors.grey : Colors.green,
+                  ),
+                  label: Text(isLoading ? 'Updating...' : 'Active'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: isActive
                         ? Colors.green[100]
@@ -247,9 +563,14 @@ class _DriverPageState extends State<DriverPage> {
                 ),
                 const SizedBox(width: 10),
                 ElevatedButton.icon(
-                  onPressed: () => setState(() => isActive = false),
-                  icon: const Icon(Icons.circle, color: Colors.red),
-                  label: const Text('Inactive'),
+                  onPressed: isLoading
+                      ? null
+                      : () => _updateDriverStatus(false),
+                  icon: Icon(
+                    Icons.circle,
+                    color: isLoading ? Colors.grey : Colors.red,
+                  ),
+                  label: Text(isLoading ? 'Updating...' : 'Inactive'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: !isActive
                         ? Colors.red[100]
@@ -273,59 +594,253 @@ class _DriverPageState extends State<DriverPage> {
               ),
             ),
 
-            // Scrollable Notifications List
+            // Scrollable Notifications List with loading and error states
             Expanded(
-              child: isActive
+              child: isLoading
+                  ? const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Loading rides...'),
+                        ],
+                      ),
+                    )
+                  : errorMessage != null
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.error, color: Colors.red, size: 48),
+                          const SizedBox(height: 16),
+                          Text(
+                            errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _loadDriverData,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : isActive
                   ? notifications.isNotEmpty
-                        ? ListView.builder(
-                            itemCount: notifications.length,
-                            itemBuilder: (context, index) {
-                              final notif = notifications[index];
-                              return GestureDetector(
-                                onTap: () => _showBottomSheet(notif),
-                                child: Card(
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  ),
-                                  color: Colors.grey[400],
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Start: ${notif['start']}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        Text('End: ${notif['end']}'),
-                                        Text('People: ${notif['people']}'),
-                                      ],
-                                    ),
+                        ? Column(
+                            children: [
+                              // Rides counter
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                color: Colors.blue[50],
+                                child: Text(
+                                  '${notifications.length} ride request${notifications.length == 1 ? '' : 's'} nearby',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue[800],
                                   ),
                                 ),
-                              );
-                            },
-                          )
-                        : const Center(
-                            child: Text(
-                              'No new notifications',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
                               ),
+                              // Rides list
+                              Expanded(
+                                child: ListView.builder(
+                                  itemCount: notifications.length,
+                                  itemBuilder: (context, index) {
+                                    final notif = notifications[index];
+                                    return GestureDetector(
+                                      onTap: () => _showBottomSheet(notif),
+                                      child: Card(
+                                        margin: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 8,
+                                        ),
+                                        color: Colors.grey[100],
+                                        elevation: 3,
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12.0),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment
+                                                        .spaceBetween,
+                                                children: [
+                                                  Text(
+                                                    'Ride #${notif['id']}',
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 16,
+                                                      color: Colors.blue,
+                                                    ),
+                                                  ),
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 8,
+                                                          vertical: 4,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.orange,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
+                                                    ),
+                                                    child: Text(
+                                                      '${notif['distance']}m away',
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.person,
+                                                    size: 16,
+                                                    color: Colors.grey,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    notif['passenger_name'] ??
+                                                        'Unknown',
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.location_on,
+                                                    size: 16,
+                                                    color: Colors.green,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Expanded(
+                                                    child: Text(
+                                                      'From: ${notif['start']}',
+                                                      style: const TextStyle(
+                                                        fontSize: 14,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.location_on,
+                                                    size: 16,
+                                                    color: Colors.red,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Expanded(
+                                                    child: Text(
+                                                      'To: ${notif['end']}',
+                                                      style: const TextStyle(
+                                                        fontSize: 14,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.group,
+                                                    size: 16,
+                                                    color: Colors.blue,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    '${notif['people']} passenger${notif['people'] == 1 ? '' : 's'}',
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          )
+                        : Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.notifications_off,
+                                  size: 48,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'No ride requests nearby',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Stay active to receive new requests',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                                const SizedBox(height: 16),
+                                ElevatedButton.icon(
+                                  onPressed: _loadDriverData,
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Refresh'),
+                                ),
+                              ],
                             ),
                           )
                   : const Center(
-                      child: Text(
-                        'Notifications are hidden (Inactive)',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.pause_circle,
+                            size: 48,
+                            color: Colors.grey,
+                          ),
+                          SizedBox(height: 16),
+                          Text(
+                            'You are offline',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'Set status to Active to receive ride requests',
+                            style: TextStyle(color: Colors.grey),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
                       ),
                     ),
             ),
@@ -342,6 +857,12 @@ class DriverAssignmentPage extends StatefulWidget {
   final String pickupLabel;
   final String dropLabel;
   final int pax;
+  final String? passengerName;
+  final String? passengerPhone;
+  final dynamic pickupLat;
+  final dynamic pickupLng;
+  final dynamic dropoffLat;
+  final dynamic dropoffLng;
 
   const DriverAssignmentPage({
     super.key,
@@ -349,6 +870,12 @@ class DriverAssignmentPage extends StatefulWidget {
     required this.pickupLabel,
     required this.dropLabel,
     required this.pax,
+    this.passengerName,
+    this.passengerPhone,
+    this.pickupLat,
+    this.pickupLng,
+    this.dropoffLat,
+    this.dropoffLng,
   });
 
   @override
@@ -381,24 +908,102 @@ class _DriverAssignmentPageState extends State<DriverAssignmentPage> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header/summary card
+          // Header/summary card with enhanced passenger info
           Container(
             color: Colors.blueGrey[50],
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Request #${widget.requestId}',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Ride #${widget.requestId}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'ACCEPTED',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 6),
-                Text('Pickup: ${widget.pickupLabel}'),
-                Text('Drop: ${widget.dropLabel}'),
-                Text('People: ${widget.pax}'),
+                const SizedBox(height: 12),
+
+                // Passenger info
+                if (widget.passengerName != null) ...[
+                  Row(
+                    children: [
+                      const Icon(Icons.person, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Passenger: ${widget.passengerName}',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                ],
+
+                if (widget.passengerPhone != null &&
+                    widget.passengerPhone!.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      const Icon(Icons.phone, size: 16),
+                      const SizedBox(width: 8),
+                      Text('Phone: ${widget.passengerPhone}'),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                ],
+
+                Row(
+                  children: [
+                    const Icon(Icons.group, size: 16),
+                    const SizedBox(width: 8),
+                    Text('Passengers: ${widget.pax}'),
+                  ],
+                ),
+                const SizedBox(height: 8),
+
+                // Location info
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on,
+                      color: Colors.green,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text('Pickup: ${widget.pickupLabel}')),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(Icons.location_on, color: Colors.red, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text('Drop: ${widget.dropLabel}')),
+                  ],
+                ),
               ],
             ),
           ),
