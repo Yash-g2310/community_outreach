@@ -276,10 +276,10 @@ Future<void> _checkRideStatus() async {
       } else if (hasActiveRide && driverAssigned) {
         print('✅ Driver assigned — navigating to UserTrackingPage.');
         if (mounted) {
-          Navigator.pushReplacement(
+          Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => const UserTrackingPage(),
+              builder: (context) => UserTrackingPage(accessToken: widget.accessToken!),
             ),
           );
         }
@@ -485,6 +485,7 @@ Future<void> _checkRideStatus() async {
           const SizedBox(width: 8),
         ],
       ),
+      
       body: _currentPosition == null
           ? const Center(child: CircularProgressIndicator())
           : Column(

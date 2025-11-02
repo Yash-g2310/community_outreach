@@ -83,7 +83,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => const UserTrackingPage(),
+              builder: (context) => UserTrackingPage(accessToken: widget.accessToken!),
             ),
           );
         } else {
