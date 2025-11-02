@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Extension to capitalize strings
 extension StringCapitalization on String {
@@ -51,6 +54,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   bool _isLoading = true;
+  bool _isUploading = false;
 
   // Dynamic profile fields
   String _displayName = '';
@@ -59,6 +63,8 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _profilePicture;
   String _displayRole = 'User';
   String? _vehicleNumber; // Only for drivers
+  
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -204,7 +210,7 @@ class _ProfilePageState extends State<ProfilePage> {
       print(
         'Raw phone_number: ${userData['phone_number']} (${userData['phone_number'].runtimeType})',
       );
-      print('Raw profile_picture: ${userData['profile_picture']}');
+      print('Raw profile_picture_url: ${userData['profile_picture_url']}'); // Updated debug statement
       print('Raw role: ${userData['role']}');
 
       // Extract user information from nested object
@@ -228,7 +234,7 @@ class _ProfilePageState extends State<ProfilePage> {
         print('  → Setting to "$_displayPhone"');
       }
 
-      _profilePicture = userData['profile_picture'];
+      _profilePicture = userData['profile_picture_url']; // Use profile_picture_url instead of profile_picture
       _displayRole = (userData['role']?.toString() ?? 'driver').capitalize();
 
       // Extract driver-specific information
@@ -268,7 +274,7 @@ class _ProfilePageState extends State<ProfilePage> {
           print('  → Setting to "$_displayPhone"');
         }
 
-        _profilePicture = data['profile_picture'];
+        _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
         _displayRole = (data['role']?.toString() ?? 'driver').capitalize();
         _vehicleNumber = data['vehicle_number']?.toString();
 
@@ -301,7 +307,7 @@ class _ProfilePageState extends State<ProfilePage> {
     print(
       'Raw phone_number: ${data['phone_number']} (${data['phone_number'].runtimeType})',
     );
-    print('Raw profile_picture: ${data['profile_picture']}');
+    print('Raw profile_picture_url: ${data['profile_picture_url']}'); // Updated debug statement
     print('Raw role: ${data['role']}');
 
     // User profile has flat structure
@@ -325,7 +331,7 @@ class _ProfilePageState extends State<ProfilePage> {
       print('  → Setting to "$_displayPhone"');
     }
 
-    _profilePicture = data['profile_picture'];
+    _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
     _displayRole = (data['role']?.toString() ?? 'user').capitalize();
 
     // Users don't have driver-specific fields
@@ -337,6 +343,127 @@ class _ProfilePageState extends State<ProfilePage> {
     print('Final _displayPhone: "$_displayPhone"');
     print('Final _displayRole: "$_displayRole"');
     print('=======================');
+  }
+
+  // Upload profile picture
+  Future<void> _uploadProfilePicture() async {
+    if (widget.accessToken == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please login to upload profile picture'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      // Pick image - handle web platform differently
+      Uint8List? imageBytes;
+      String fileName = 'profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      if (kIsWeb) {
+        // For web, use XFile and read bytes directly
+        final XFile? image = await _picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 512,
+          maxHeight: 512,
+          imageQuality: 85,
+        );
+
+        if (image == null) return;
+        imageBytes = await image.readAsBytes();
+        fileName = image.name;
+      } else {
+        // For mobile platforms
+        final XFile? image = await _picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 512,
+          maxHeight: 512,
+          imageQuality: 85,
+        );
+
+        if (image == null) return;
+        imageBytes = await image.readAsBytes();
+      }
+
+      setState(() {
+        _isUploading = true;
+      });
+
+      // Prepare multipart request
+      String apiEndpoint = 'http://localhost:8000/api/rides/user/profile/';
+      
+      var request = http.MultipartRequest('PATCH', Uri.parse(apiEndpoint));
+      request.headers['Authorization'] = 'Bearer ${widget.accessToken}';
+      
+      // Add image file
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'profile_picture',
+          imageBytes,
+          filename: fileName,
+        ),
+      );
+
+      print('=== UPLOADING PROFILE PICTURE ===');
+      print('Endpoint: $apiEndpoint');
+      print('File size: ${imageBytes.length} bytes');
+      print('Filename: $fileName');
+
+      // Send request
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      print('Upload Status: ${response.statusCode}');
+      print('Upload Response: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _profilePicture = data['profile_picture_url'];
+          _isUploading = false;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile picture updated successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        setState(() {
+          _isUploading = false;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Upload failed: ${response.statusCode}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (error) {
+      print('❌ Upload error: $error');
+      setState(() {
+        _isUploading = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload error: ${error.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -399,30 +526,59 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         const SizedBox(height: 10),
                         // Profile Image - dynamic based on API response
-                        CircleAvatar(
-                          radius: 45,
-                          backgroundColor: Colors.white.withOpacity(0.3),
-                          child: _profilePicture != null
-                              ? ClipOval(
-                                  child: Image.network(
-                                    _profilePicture!,
-                                    width: 90,
-                                    height: 90,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return const Icon(
-                                        Icons.person,
-                                        size: 50,
-                                        color: Colors.white,
-                                      );
-                                    },
+                        Stack(
+                          children: [
+                            CircleAvatar(
+                              radius: 45,
+                              backgroundColor: Colors.white.withOpacity(0.3),
+                              child: _isUploading
+                                  ? const CircularProgressIndicator(
+                                      color: Colors.white,
+                                    )
+                                  : _profilePicture != null
+                                      ? ClipOval(
+                                          child: Image.network(
+                                            _profilePicture!,
+                                            width: 90,
+                                            height: 90,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (context, error, stackTrace) {
+                                              return const Icon(
+                                                Icons.person,
+                                                size: 50,
+                                                color: Colors.white,
+                                              );
+                                            },
+                                          ),
+                                        )
+                                      : const Icon(
+                                          Icons.person,
+                                          size: 50,
+                                          color: Colors.white,
+                                        ),
+                            ),
+                            // Edit button
+                            Positioned(
+                              bottom: 0,
+                              right: 0,
+                              child: GestureDetector(
+                                onTap: _isUploading ? null : _uploadProfilePicture,
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.cyan, width: 2),
                                   ),
-                                )
-                              : const Icon(
-                                  Icons.person,
-                                  size: 50,
-                                  color: Colors.white,
+                                  child: const Icon(
+                                    Icons.camera_alt,
+                                    size: 16,
+                                    color: Colors.cyan,
+                                  ),
                                 ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 10),
                         Text(

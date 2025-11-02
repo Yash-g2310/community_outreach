@@ -168,13 +168,20 @@ class _SignupPageState extends State<SignupPage> {
         final userName = userData['username'];
         final userRole = userData['role'];
         final tokens = responseData['tokens'];
+        final accessToken = tokens['access'];
 
         print('=== SIGNUP SUCCESS ===');
         print('User Name: $userName');
         print('User Role: $userRole');
         print('User ID: ${userData['id']}');
-        print('Access Token: ${tokens['access'].substring(0, 20)}...');
+        print('Access Token: ${accessToken.substring(0, 20)}...');
         print('======================');
+
+        // Upload profile picture if selected
+        if (_profileImageBytes != null) {
+          print('=== UPLOADING PROFILE PICTURE ===');
+          await _uploadProfilePicture(accessToken);
+        }
 
         // Show success message
         if (mounted) {
@@ -242,6 +249,45 @@ class _SignupPageState extends State<SignupPage> {
       } else {
         throw Exception(error.toString().replaceAll('Exception: ', ''));
       }
+    }
+  }
+
+  // Upload profile picture after successful registration
+  Future<void> _uploadProfilePicture(String accessToken) async {
+    if (_profileImageBytes == null) return;
+
+    try {
+      var request = http.MultipartRequest(
+        'PATCH',
+        Uri.parse('http://localhost:8000/api/rides/user/profile/'),
+      );
+      
+      request.headers['Authorization'] = 'Bearer $accessToken';
+      
+      // Add image file
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'profile_picture',
+          _profileImageBytes!,
+          filename: _profileImagePath ?? 'profile.jpg',
+        ),
+      );
+
+      print('Uploading profile picture...');
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      print('Upload Status: ${response.statusCode}');
+      print('Upload Response: ${response.body}');
+
+      if (response.statusCode == 200) {
+        print('✅ Profile picture uploaded successfully');
+      } else {
+        print('⚠️ Profile picture upload failed: ${response.statusCode}');
+      }
+    } catch (error) {
+      print('❌ Profile picture upload error: $error');
+      // Don't throw - registration was successful, just picture upload failed
     }
   }
 

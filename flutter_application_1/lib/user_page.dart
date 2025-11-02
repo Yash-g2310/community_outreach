@@ -569,7 +569,7 @@ Future<void> _checkRideStatus() async {
                                 ],
                               ),
                             );
-                          }).toList(),
+                          }),
                         ],
                       ),
                     ],
