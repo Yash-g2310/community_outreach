@@ -74,9 +74,7 @@ class RideRequest(models.Model):
     pickup_longitude = models.DecimalField(max_digits=10, decimal_places=6)
     pickup_address = models.TextField(null=True, blank=True)
     
-    # Dropoff location
-    dropoff_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    dropoff_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    # Dropoff location (only address needed)
     dropoff_address = models.TextField(null=True, blank=True)
     
     # Passenger count
@@ -85,8 +83,8 @@ class RideRequest(models.Model):
     # Status & timing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
-    # Broadcast radius in meters (for WebSocket notifications)
-    broadcast_radius = models.IntegerField(default=5000)
+    # Broadcast radius in meters (0.5 km = 500 meters)
+    broadcast_radius = models.IntegerField(default=500)
     
     # Timestamps
     requested_at = models.DateTimeField(auto_now_add=True)
