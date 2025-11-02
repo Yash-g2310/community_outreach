@@ -11,12 +11,12 @@ urlpatterns = [
     path('driver/profile/', views.driver_profile, name='driver-profile'),
     path('driver/status/', views.update_driver_status, name='driver-status'),
     path('driver/location/', views.update_driver_location, name='driver-location'),
-    path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
     path('driver/nearby-rides/', views.nearby_rides, name='nearby-rides'),
-    # Need to verify
     path('driver/current-ride/', views.driver_current_ride, name='driver-current-ride'),
+    path('driver/history/', views.driver_ride_history, name='driver-ride-history'),
     
-    # Passenger Ride Management
+    # Passenger APIs
+    path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
     path('passenger/request/', views.create_ride_request, name='create-ride'),
     path('passenger/current/', views.get_current_ride, name='current-ride'),
     path('passenger/history/', views.ride_history, name='ride-history'),
@@ -27,6 +27,7 @@ urlpatterns = [
     path('handle/<int:ride_id>/complete/', views.complete_ride, name='complete-ride'),
     path('handle/<int:ride_id>/driver-cancel/', views.driver_cancel_ride, name='driver-cancel-ride'),
     
+    # Need to verify
     # Real-time Location Tracking
     path('handle/<int:ride_id>/driver-location/', views.get_driver_location, name='driver-location-track'),
     path('handle/<int:ride_id>/passenger-location/', views.get_passenger_location, name='passenger-location'),

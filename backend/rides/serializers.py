@@ -4,11 +4,25 @@ from .models import User, DriverProfile, RideRequest
 
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model"""
+    profile_picture_url = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'role', 'phone_number', 
-                  'completed_rides', 'profile_picture']
-        read_only_fields = ['id', 'completed_rides']
+                  'completed_rides', 'profile_picture', 'profile_picture_url']
+        read_only_fields = ['id', 'completed_rides', 'profile_picture_url']
+        extra_kwargs = {
+            'profile_picture': {'write_only': True, 'required': False}
+        }
+    
+    def get_profile_picture_url(self, obj):
+        """Return full URL for profile picture"""
+        if obj.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile_picture.url)
+            return obj.profile_picture.url
+        return None
 
 
 class DriverProfileSerializer(serializers.ModelSerializer):
