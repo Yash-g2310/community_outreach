@@ -12,15 +12,15 @@ urlpatterns = [
     path('driver/status/', views.update_driver_status, name='driver-status'),
     path('driver/location/', views.update_driver_location, name='driver-location'),
     path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
-    # Need to verify
     path('driver/nearby-rides/', views.nearby_rides, name='nearby-rides'),
+    # Need to verify
     path('driver/current-ride/', views.driver_current_ride, name='driver-current-ride'),
     
     # Passenger Ride Management
-    path('rides/request/', views.create_ride_request, name='create-ride'),
-    path('rides/current/', views.get_current_ride, name='current-ride'),
-    path('rides/history/', views.ride_history, name='ride-history'),
-    path('rides/<int:ride_id>/cancel/', views.cancel_ride, name='cancel-ride'),
+    path('passenger/request/', views.create_ride_request, name='create-ride'),
+    path('passenger/current/', views.get_current_ride, name='current-ride'),
+    path('passenger/history/', views.ride_history, name='ride-history'),
+    path('passenger/<int:ride_id>/cancel/', views.cancel_ride, name='cancel-ride'),
     
     # Driver Ride Actions
     path('rides/<int:ride_id>/accept/', views.accept_ride, name='accept-ride'),

@@ -48,21 +48,22 @@ class RideRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = RideRequest
         fields = ['id', 'passenger', 'driver', 'pickup_latitude', 'pickup_longitude',
-                  'pickup_address', 'dropoff_latitude', 'dropoff_longitude', 
-                  'dropoff_address', 'number_of_passengers', 'status', 'broadcast_radius', 
-                  'requested_at', 'accepted_at', 'started_at', 'completed_at', 'cancelled_at',
-                  'cancellation_reason']
+                  'pickup_address', 'dropoff_address', 'number_of_passengers', 
+                  'status', 'broadcast_radius', 'requested_at', 'accepted_at', 
+                  'started_at', 'completed_at', 'cancelled_at', 'cancellation_reason']
         read_only_fields = ['id', 'passenger', 'driver', 'status', 'requested_at',
                            'accepted_at', 'started_at', 'completed_at', 'cancelled_at']
 
 
 class RideRequestCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating ride requests"""
+    # Make broadcast_radius optional with default 500m
+    broadcast_radius = serializers.IntegerField(default=500, required=False)
+    
     class Meta:
         model = RideRequest
         fields = ['pickup_latitude', 'pickup_longitude', 'pickup_address',
-                  'dropoff_latitude', 'dropoff_longitude', 'dropoff_address',
-                  'number_of_passengers', 'broadcast_radius']
+                  'dropoff_address', 'number_of_passengers', 'broadcast_radius']
 
 
 class LocationUpdateSerializer(serializers.Serializer):
