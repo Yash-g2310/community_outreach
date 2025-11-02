@@ -30,17 +30,18 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     r = 6371000
     return c * r
 
-@api_view(['GET', 'PUT'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def user_profile(request):
-    """Get or update user profile"""
+    """Get or update user profile (including profile picture)"""
     user = request.user
     
     if request.method == 'GET':
         serializer = UserSerializer(user)
         return Response(serializer.data)
     
-    elif request.method == 'PUT':
+    elif request.method in ['PUT', 'PATCH']:
+        # Handle both JSON and multipart/form-data
         serializer = UserSerializer(user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()

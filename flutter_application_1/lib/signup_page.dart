@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -14,7 +14,8 @@ class SignupPage extends StatefulWidget {
 class _SignupPageState extends State<SignupPage> {
   bool _isLoading = false;
   String _selectedRole = 'user';
-  File? _profileImage;
+  Uint8List? _profileImageBytes; // For web compatibility
+  String? _profileImagePath; // For storing image path info
 
   // Text controllers for form fields
   final TextEditingController _usernameController = TextEditingController();
@@ -36,7 +37,7 @@ class _SignupPageState extends State<SignupPage> {
     super.dispose();
   }
 
-  // Pick profile image
+  // Pick profile image - Web compatible
   Future<void> _pickImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(
@@ -47,8 +48,11 @@ class _SignupPageState extends State<SignupPage> {
     );
 
     if (image != null) {
+      // Read image as bytes (works on web and mobile)
+      final bytes = await image.readAsBytes();
       setState(() {
-        _profileImage = File(image.path);
+        _profileImageBytes = bytes;
+        _profileImagePath = image.name;
       });
     }
   }
@@ -126,7 +130,7 @@ class _SignupPageState extends State<SignupPage> {
     if (_selectedRole == 'driver') {
       print('Vehicle Number: ${_erickNoController.text}');
     }
-    print('Profile Image: ${_profileImage != null ? 'Selected' : 'None'}');
+    print('Profile Image: ${_profileImageBytes != null ? 'Selected' : 'None'}');
     print('API Endpoint: http://localhost:8000/api/auth/register/');
     print('=====================');
 
@@ -324,11 +328,11 @@ class _SignupPageState extends State<SignupPage> {
                         borderRadius: BorderRadius.circular(60),
                         border: Border.all(color: Colors.grey[300]!),
                       ),
-                      child: _profileImage != null
+                      child: _profileImageBytes != null
                           ? ClipRRect(
                               borderRadius: BorderRadius.circular(60),
-                              child: Image.file(
-                                _profileImage!,
+                              child: Image.memory(
+                                _profileImageBytes!,
                                 fit: BoxFit.cover,
                               ),
                             )
