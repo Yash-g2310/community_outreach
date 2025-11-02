@@ -285,7 +285,7 @@ def get_current_ride(request):
     
     ride = RideRequest.objects.filter(
         passenger=request.user,
-        status__in=['pending', 'accepted', 'in_progress']
+        status__in=['pending', 'accepted']
     ).select_related('driver__driver_profile').first()
     
     if not ride:
@@ -309,10 +309,7 @@ def get_current_ride(request):
         response_data['message'] = 'Searching for nearby drivers...'
         response_data['driver_assigned'] = False
     elif ride.status == 'accepted':
-        response_data['message'] = 'Driver is on the way to pick you up!'
-        response_data['driver_assigned'] = True
-    elif ride.status == 'in_progress':
-        response_data['message'] = 'Trip in progress'
+        response_data['message'] = 'Driver is on the way!'
         response_data['driver_assigned'] = True
     
     return Response(response_data)
@@ -545,7 +542,7 @@ def driver_current_ride(request):
     
     ride = RideRequest.objects.filter(
         driver=request.user,
-        status__in=['accepted', 'in_progress']
+        status='accepted'
     ).first()
     
     if not ride:
@@ -560,48 +557,12 @@ def driver_current_ride(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def start_ride(request, ride_id):
-    """
-    Start a ride - CALLED BY DRIVER
-    
-    Driver taps "Start Ride" button when passenger gets into the vehicle
-    Changes status: accepted → in_progress
-    """
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can start rides'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    try:
-        ride = RideRequest.objects.get(id=ride_id, driver=request.user, status='accepted')
-    except RideRequest.DoesNotExist:
-        return Response(
-            {'error': 'Ride not found or not in accepted status'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    ride.status = 'in_progress'
-    ride.started_at = timezone.now()
-    ride.save()
-    
-    return Response({
-        'success': True,
-        'message': 'Ride started successfully',
-        'ride_id': ride.id,
-        'status': 'in_progress',
-        'started_at': ride.started_at
-    })
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def complete_ride(request, ride_id):
     """
     Complete a ride - CALLED BY DRIVER
     
     Driver taps "Complete Ride" button when passenger reaches destination
-    Changes status: in_progress → completed
+    Changes status: accepted → completed (No 'in_progress' status needed)
     Makes driver available for next ride
     """
     if request.user.role != 'driver':
@@ -611,10 +572,10 @@ def complete_ride(request, ride_id):
         )
     
     try:
-        ride = RideRequest.objects.get(id=ride_id, driver=request.user, status='in_progress')
+        ride = RideRequest.objects.get(id=ride_id, driver=request.user, status='accepted')
     except RideRequest.DoesNotExist:
         return Response(
-            {'error': 'Ride not found or not in progress'},
+            {'error': 'Ride not found or not accepted by you'},
             status=status.HTTP_404_NOT_FOUND
         )
     
@@ -646,7 +607,7 @@ def complete_ride(request, ride_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def driver_cancel_ride(request, ride_id):
-    """Cancel ride by driver"""
+    """Cancel ride by driver - puts ride back to pending for other drivers"""
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can cancel rides'},
@@ -657,11 +618,11 @@ def driver_cancel_ride(request, ride_id):
         ride = RideRequest.objects.get(
             id=ride_id,
             driver=request.user,
-            status__in=['accepted', 'in_progress']
+            status='accepted'
         )
     except RideRequest.DoesNotExist:
         return Response(
-            {'error': 'Ride not found'},
+            {'error': 'Ride not found or not accepted by you'},
             status=status.HTTP_404_NOT_FOUND
         )
     
@@ -676,9 +637,8 @@ def driver_cancel_ride(request, ride_id):
         request.user.driver_profile.status = 'available'
         request.user.driver_profile.save()
         
-        # ✅ No WebSocket - Passenger will see via polling
-        
         return Response({
+            'success': True,
             'message': 'Ride cancelled successfully. Ride is now available for other drivers.',
             'ride_id': ride.id
         })
@@ -693,7 +653,7 @@ def get_driver_location(request, ride_id):
         ride = RideRequest.objects.get(
             id=ride_id,
             passenger=request.user,
-            status__in=['accepted', 'in_progress']
+            status='accepted'
         )
     except RideRequest.DoesNotExist:
         return Response(

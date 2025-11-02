@@ -54,12 +54,11 @@ class DriverProfile(models.Model):
 
 
 class RideRequest(models.Model):
-    """Simplified ride request model for WebSocket-based notifications"""
+    """Simplified ride request model for polling-based notifications"""
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('accepted', 'Accepted'),
         ('no_drivers', 'No Drivers Available'),
-        ('in_progress', 'In Progress'),
         ('completed', 'Completed'),
         ('cancelled_user', 'Cancelled by User'),
         ('cancelled_driver', 'Cancelled by Driver'),
@@ -89,7 +88,6 @@ class RideRequest(models.Model):
     # Timestamps
     requested_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
-    started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     

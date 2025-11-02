@@ -50,9 +50,9 @@ class RideRequestSerializer(serializers.ModelSerializer):
         fields = ['id', 'passenger', 'driver', 'pickup_latitude', 'pickup_longitude',
                   'pickup_address', 'dropoff_address', 'number_of_passengers', 
                   'status', 'broadcast_radius', 'requested_at', 'accepted_at', 
-                  'started_at', 'completed_at', 'cancelled_at', 'cancellation_reason']
+                  'completed_at', 'cancelled_at', 'cancellation_reason']
         read_only_fields = ['id', 'passenger', 'driver', 'status', 'requested_at',
-                           'accepted_at', 'started_at', 'completed_at', 'cancelled_at']
+                           'accepted_at', 'completed_at', 'cancelled_at']
 
 
 class RideRequestCreateSerializer(serializers.ModelSerializer):

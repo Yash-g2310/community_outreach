@@ -31,8 +31,6 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
-    'daphne',  # WebSocket support - must be FIRST, before django.contrib.staticfiles
-    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -43,7 +41,6 @@ INSTALLED_APPS = [
     # Third-party apps
     'rest_framework',
     'corsheaders',
-    'channels',
     
     # Local apps
     'rides',
@@ -174,18 +171,3 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': True,
 }
 
-# Channels / WebSocket Configuration
-ASGI_APPLICATION = 'app_backend.asgi.application'
-
-CHANNEL_LAYERS = {
-    'default': {
-        # Use in-memory channel layer for development (no Redis needed)
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
-        
-        # For production with Redis, use this instead:
-        # 'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        # 'CONFIG': {
-        #     "hosts": [('127.0.0.1', 6379)],
-        # },
-    },
-}

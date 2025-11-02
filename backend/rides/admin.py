@@ -32,7 +32,7 @@ class RideRequestAdmin(admin.ModelAdmin):
     list_display = ['id', 'passenger', 'driver', 'status', 'requested_at', 'accepted_at', 'completed_at']
     list_filter = ['status', 'requested_at']
     search_fields = ['passenger__username', 'driver__username', 'pickup_address']
-    readonly_fields = ['requested_at', 'accepted_at', 'started_at', 'completed_at', 'cancelled_at']
+    readonly_fields = ['requested_at', 'accepted_at', 'completed_at', 'cancelled_at']
     date_hierarchy = 'requested_at'
 
 

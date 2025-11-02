@@ -469,7 +469,7 @@ class _DriverPageState extends State<DriverPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/rides/$rideId/accept/'),
+        Uri.parse('$baseUrl/api/rides/handle/$rideId/accept/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -514,7 +514,7 @@ class _DriverPageState extends State<DriverPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/rides/$rideId/driver-cancel/'),
+        Uri.parse('$baseUrl/api/rides/handle/$rideId/driver-cancel/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
