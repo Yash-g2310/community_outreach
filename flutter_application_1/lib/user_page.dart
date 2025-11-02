@@ -69,6 +69,12 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // API Configuration
   static const String baseUrl = 'http://localhost:8000';
 
+  // Helper method to truncate coordinates to 6 decimal places
+  double _truncateCoordinate(double coordinate) {
+    // Truncate to 6 decimal places to fit Django model constraints (max_digits=10, decimal_places=6)
+    return double.parse(coordinate.toStringAsFixed(6));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -144,14 +150,17 @@ class _UserMapScreenState extends State<UserMapScreen> {
     });
 
     try {
-      // Prepare ride data
+      // Prepare ride data with truncated coordinates
       final rideData = {
-        'pickup_latitude': _currentPosition!.latitude,
-        'pickup_longitude': _currentPosition!.longitude,
+        'pickup_latitude': _truncateCoordinate(_currentPosition!.latitude),
+        'pickup_longitude': _truncateCoordinate(_currentPosition!.longitude),
         'pickup_address': _pickupController.text.trim(),
-        'dropoff_latitude':
-            _currentPosition!.latitude + 0.01, // Simple offset for testing
-        'dropoff_longitude': _currentPosition!.longitude + 0.01,
+        'dropoff_latitude': _truncateCoordinate(
+          _currentPosition!.latitude + 0.01,
+        ), // Simple offset for testing
+        'dropoff_longitude': _truncateCoordinate(
+          _currentPosition!.longitude + 0.01,
+        ),
         'dropoff_address': _dropController.text.trim(),
         'number_of_passengers': passengers,
         'broadcast_radius': 5000, // 5km radius
