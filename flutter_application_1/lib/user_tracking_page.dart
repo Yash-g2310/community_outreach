@@ -5,10 +5,21 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'user_page.dart'; // ✅ for navigation back to user page
 
 class UserTrackingPage extends StatefulWidget {
   final String accessToken;
-  const UserTrackingPage({super.key, required this.accessToken});
+  final String? userName;
+  final String? userEmail;
+  final String? userRole;
+
+  const UserTrackingPage({
+    super.key,
+    required this.accessToken,
+    this.userName,
+    this.userEmail,
+    this.userRole,
+  });
 
   @override
   State<UserTrackingPage> createState() => _UserTrackingPageState();
@@ -72,7 +83,8 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        if (data['has_active_ride'] == true && data['driver_assigned'] == true) {
+        if (data['has_active_ride'] == true &&
+            data['driver_assigned'] == true) {
           final driver = data['ride']['driver'];
 
           setState(() {
@@ -102,6 +114,30 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       appBar: AppBar(
         title: const Text('User Tracking'),
         backgroundColor: Colors.blueAccent,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            print('=== BACK TO USER PAGE ===');
+            print('Navigating from tracking to user page');
+            print('========================');
+
+            // Stop the update timer
+            _updateTimer?.cancel();
+
+            // Navigate back to UserMapScreen with proper parameters
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => UserMapScreen(
+                  userName: widget.userName,
+                  userEmail: widget.userEmail,
+                  userRole: widget.userRole,
+                  accessToken: widget.accessToken,
+                ),
+              ),
+            );
+          },
+        ),
       ),
       body: _userPosition == null
           ? const Center(child: CircularProgressIndicator())
@@ -136,13 +172,15 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                           const Spacer(),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: _status == 'completed'
                                   ? Colors.green
                                   : _status == 'cancelled'
-                                      ? Colors.red
-                                      : Colors.orange,
+                                  ? Colors.red
+                                  : Colors.orange,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -161,9 +199,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                         children: [
                           const Icon(Icons.person, size: 16),
                           const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Driver: $_username'),
-                          ),
+                          Expanded(child: Text('Driver: $_username')),
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -171,9 +207,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                         children: [
                           const Icon(Icons.phone, size: 16),
                           const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Phone: $_phoneNumber'),
-                          ),
+                          Expanded(child: Text('Phone: $_phoneNumber')),
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -181,9 +215,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                         children: [
                           const Icon(Icons.directions_car, size: 16),
                           const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Vehicle: $_vehicleNumber'),
-                          ),
+                          Expanded(child: Text('Vehicle: $_vehicleNumber')),
                         ],
                       ),
                     ],
@@ -225,7 +257,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                     fontSize: 10,
                                     color: Colors.green,
                                   ),
-                                )
+                                ),
                               ],
                             ),
                           ),
