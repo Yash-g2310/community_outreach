@@ -24,7 +24,6 @@ urlpatterns = [
     
     # Driver Ride Actions
     path('handle/<int:ride_id>/accept/', views.accept_ride, name='accept-ride'),
-    path('handle/<int:ride_id>/start/', views.start_ride, name='start-ride'),
     path('handle/<int:ride_id>/complete/', views.complete_ride, name='complete-ride'),
     path('handle/<int:ride_id>/driver-cancel/', views.driver_cancel_ride, name='driver-cancel-ride'),
     
