@@ -212,8 +212,9 @@ class _DriverPageState extends State<DriverPage> {
     });
 
     try {
-      // Load driver profile and nearby rides
-      await Future.wait([_fetchDriverProfile(), _fetchNearbyRides()]);
+      // Load driver profile first, then nearby rides (need profile for fallback location)
+      await _fetchDriverProfile();
+      await _fetchNearbyRides();
 
       // Start location updates if driver is active
       if (isActive) {
@@ -259,18 +260,86 @@ class _DriverPageState extends State<DriverPage> {
   }
 
   Future<void> _fetchNearbyRides() async {
+    print('=== FETCH NEARBY RIDES STARTED ===');
+    print('Driver Profile available: ${driverProfile != null}');
+    print('Current Position available: ${_currentPosition != null}');
+    print('isActive: $isActive');
+
     try {
-      final response = await http.get(
+      // Get current position for the API request
+      Position? position = _currentPosition;
+      if (position == null) {
+        try {
+          position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          );
+        } catch (e) {
+          print('Unable to get current position for nearby rides: $e');
+          // Use driver profile location as fallback
+          if (driverProfile != null &&
+              driverProfile!['current_latitude'] != null &&
+              driverProfile!['current_longitude'] != null) {
+            final lat = double.tryParse(
+              driverProfile!['current_latitude'].toString(),
+            );
+            final lng = double.tryParse(
+              driverProfile!['current_longitude'].toString(),
+            );
+            if (lat != null && lng != null) {
+              print('Using driver profile location: $lat, $lng');
+            } else {
+              print('No valid location available for nearby rides API');
+              setState(() {
+                notifications = [];
+              });
+              return;
+            }
+          } else {
+            print('No location available for nearby rides API');
+            setState(() {
+              notifications = [];
+            });
+            return;
+          }
+        }
+      }
+
+      // Prepare request body with location
+      final lat =
+          position?.latitude ??
+          double.tryParse(driverProfile!['current_latitude'].toString());
+      final lng =
+          position?.longitude ??
+          double.tryParse(driverProfile!['current_longitude'].toString());
+
+      // Round to 6 decimal places to match backend expectations
+      final requestBody = {
+        'latitude': lat != null ? double.parse(lat.toStringAsFixed(6)) : null,
+        'longitude': lng != null ? double.parse(lng.toStringAsFixed(6)) : null,
+      };
+
+      print(
+        'Fetching nearby rides with location: ${requestBody['latitude']}, ${requestBody['longitude']}',
+      );
+      print('Request body JSON: ${json.encode(requestBody)}');
+
+      final response = await http.post(
         Uri.parse('$baseUrl/api/rides/driver/nearby-rides/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
         },
+        body: json.encode(requestBody),
       );
+
+      print('Nearby rides API response: ${response.statusCode}');
+      print('Nearby rides API body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final List<dynamic> ridesData = data['rides'] ?? [];
+
+        print('Found ${ridesData.length} nearby rides');
 
         setState(() {
           notifications = ridesData.map<Map<String, dynamic>>((ride) {
@@ -290,8 +359,13 @@ class _DriverPageState extends State<DriverPage> {
             };
           }).toList();
         });
+
+        print('Updated notifications list with ${notifications.length} rides');
+        print('Final notifications state: $notifications');
+        print('=== NOTIFICATIONS UPDATE COMPLETE ===');
       } else if (response.statusCode == 400) {
         // Driver not available or no location
+        print('Driver not available or location issue');
         setState(() {
           notifications = [];
         });
