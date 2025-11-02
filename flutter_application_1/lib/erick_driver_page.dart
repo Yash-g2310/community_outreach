@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'profile.dart';
 import 'ride_tracking_page.dart';
 
@@ -50,10 +51,12 @@ class _DriverPageState extends State<DriverPage> {
   static const String baseUrl = 'http://localhost:8000';
 
   List<Map<String, dynamic>> notifications = [];
+  Set<int> _rejectedRideIds = {}; // Local storage for rejected ride IDs
 
   @override
   void initState() {
     super.initState();
+    _loadRejectedRides(); // Load rejected rides from local storage
     _loadDriverData();
     _initializeLocation();
   }
@@ -230,6 +233,71 @@ class _DriverPageState extends State<DriverPage> {
     }
   }
 
+  // Load rejected ride IDs from local storage
+  Future<void> _loadRejectedRides() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final driverId = widget.userData?['id']?.toString() ?? 'unknown';
+      final rejectedList =
+          prefs.getStringList('rejected_rides_$driverId') ?? [];
+
+      setState(() {
+        _rejectedRideIds = rejectedList
+            .map((id) => int.tryParse(id))
+            .where((id) => id != null)
+            .cast<int>()
+            .toSet();
+      });
+
+      print(
+        'Loaded ${_rejectedRideIds.length} rejected rides from local storage: $_rejectedRideIds',
+      );
+    } catch (e) {
+      print('Error loading rejected rides: $e');
+      setState(() {
+        _rejectedRideIds = {};
+      });
+    }
+  }
+
+  // Save rejected ride IDs to local storage
+  Future<void> _saveRejectedRides() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final driverId = widget.userData?['id']?.toString() ?? 'unknown';
+      final rejectedList = _rejectedRideIds.map((id) => id.toString()).toList();
+
+      await prefs.setStringList('rejected_rides_$driverId', rejectedList);
+      print('Saved ${_rejectedRideIds.length} rejected rides to local storage');
+    } catch (e) {
+      print('Error saving rejected rides: $e');
+    }
+  }
+
+  // Add a ride ID to rejected list
+  Future<void> _addRejectedRide(int rideId) async {
+    setState(() {
+      _rejectedRideIds.add(rideId);
+    });
+    await _saveRejectedRides();
+    print(
+      'Added ride $rideId to rejected list. Total rejected: ${_rejectedRideIds.length}',
+    );
+  }
+
+  // Clear old rejected rides (optional cleanup - can be called periodically)
+  Future<void> _cleanupOldRejectedRides() async {
+    // Clear all rejected rides (useful for testing or periodic cleanup)
+    setState(() {
+      _rejectedRideIds.clear();
+    });
+    await _saveRejectedRides();
+    print('Cleared all rejected rides');
+
+    // Refresh the rides list to show previously rejected rides
+    await _fetchNearbyRides();
+  }
+
   Future<void> _fetchDriverProfile() async {
     try {
       final response = await http.get(
@@ -352,29 +420,45 @@ class _DriverPageState extends State<DriverPage> {
         final data = json.decode(response.body);
         final List<dynamic> ridesData = data['rides'] ?? [];
 
-        print('Found ${ridesData.length} nearby rides');
+        print('Found ${ridesData.length} nearby rides from API');
+
+        // Filter out rejected rides and map to notification format
+        final filteredRides = ridesData
+            .where((ride) {
+              final rideId = ride['id'] as int;
+              final isRejected = _rejectedRideIds.contains(rideId);
+              if (isRejected) {
+                print('Filtering out rejected ride ID: $rideId');
+              }
+              return !isRejected;
+            })
+            .map<Map<String, dynamic>>((ride) {
+              return {
+                'id': ride['id'],
+                'start': ride['pickup_address'] ?? 'Unknown pickup',
+                'end': ride['dropoff_address'] ?? 'Unknown destination',
+                'people': ride['number_of_passengers'] ?? 1,
+                'distance': ride['distance_from_driver'] ?? 0,
+                'passenger_name': ride['passenger']?['username'] ?? 'Unknown',
+                'passenger_phone': ride['passenger']?['phone_number'] ?? '',
+                'pickup_lat': ride['pickup_latitude'],
+                'pickup_lng': ride['pickup_longitude'],
+                'dropoff_lat': ride['dropoff_latitude'],
+                'dropoff_lng': ride['dropoff_longitude'],
+                'requested_at': ride['requested_at'],
+              };
+            })
+            .toList();
 
         setState(() {
-          notifications = ridesData.map<Map<String, dynamic>>((ride) {
-            return {
-              'id': ride['id'],
-              'start': ride['pickup_address'] ?? 'Unknown pickup',
-              'end': ride['dropoff_address'] ?? 'Unknown destination',
-              'people': ride['number_of_passengers'] ?? 1,
-              'distance': ride['distance_from_driver'] ?? 0,
-              'passenger_name': ride['passenger']?['username'] ?? 'Unknown',
-              'passenger_phone': ride['passenger']?['phone_number'] ?? '',
-              'pickup_lat': ride['pickup_latitude'],
-              'pickup_lng': ride['pickup_longitude'],
-              'dropoff_lat': ride['dropoff_latitude'],
-              'dropoff_lng': ride['dropoff_longitude'],
-              'requested_at': ride['requested_at'],
-            };
-          }).toList();
+          notifications = filteredRides;
         });
 
-        print('Updated notifications list with ${notifications.length} rides');
+        print(
+          'After filtering: ${notifications.length} rides (rejected ${ridesData.length - notifications.length} rides)',
+        );
         print('Final notifications state: $notifications');
+        print('Current rejected rides: $_rejectedRideIds');
         print('=== NOTIFICATIONS UPDATE COMPLETE ===');
       } else if (response.statusCode == 400) {
         // Driver not available or no location
@@ -431,6 +515,8 @@ class _DriverPageState extends State<DriverPage> {
           setState(() {
             notifications = [];
           });
+          // Optionally clear rejected rides when going offline
+          // await _cleanupOldRejectedRides();
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -546,29 +632,22 @@ class _DriverPageState extends State<DriverPage> {
     });
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/handle/$rideId/driver-cancel/'),
-        headers: {
-          'Authorization': 'Bearer ${widget.jwtToken}',
-          'Content-Type': 'application/json',
-        },
+      // Add to local rejected rides list (client-side filtering)
+      await _addRejectedRide(rideId);
+
+      // Remove the rejected ride from current notifications
+      setState(() {
+        notifications.removeWhere((notif) => notif['id'] == rideId);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ride rejected - hidden from your list! ❌'),
+          backgroundColor: Colors.orange,
+        ),
       );
 
-      if (response.statusCode == 200) {
-        // Remove the rejected ride from notifications
-        setState(() {
-          notifications.removeWhere((notif) => notif['id'] == rideId);
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ride rejected successfully! ❌'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      } else {
-        throw Exception('Failed to reject ride: ${response.statusCode}');
-      }
+      print('Ride $rideId rejected and hidden locally');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
