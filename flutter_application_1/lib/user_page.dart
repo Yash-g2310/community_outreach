@@ -243,20 +243,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
     });
 
     try {
-      // Prepare ride data with truncated coordinates
+      // Prepare ride data with simplified structure
       final rideData = {
         'pickup_latitude': _truncateCoordinate(_currentPosition!.latitude),
         'pickup_longitude': _truncateCoordinate(_currentPosition!.longitude),
         'pickup_address': _pickupController.text.trim(),
-        'dropoff_latitude': _truncateCoordinate(
-          _currentPosition!.latitude + 0.01,
-        ), // Simple offset for testing
-        'dropoff_longitude': _truncateCoordinate(
-          _currentPosition!.longitude + 0.01,
-        ),
         'dropoff_address': _dropController.text.trim(),
         'number_of_passengers': passengers,
-        'broadcast_radius': 5000, // 5km radius
       };
 
       print('=== RIDE REQUEST ===');
@@ -264,7 +257,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       print('==================');
 
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/rides/request/'),
+        Uri.parse('$baseUrl/api/rides/passenger/request/'),
         headers: {
           'Authorization': 'Bearer ${widget.accessToken}',
           'Content-Type': 'application/json',
