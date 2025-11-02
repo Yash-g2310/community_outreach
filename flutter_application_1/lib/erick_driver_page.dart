@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'package:geolocator/geolocator.dart';
 import 'profile.dart';
 // If you plan to show a map, later add:
 // import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -39,6 +41,8 @@ class _DriverPageState extends State<DriverPage> {
   bool isLoading = false;
   String? errorMessage;
   Map<String, dynamic>? driverProfile;
+  Timer? _locationUpdateTimer;
+  Position? _currentPosition;
 
   // API Configuration
   static const String baseUrl = 'http://localhost:8000';
@@ -49,6 +53,123 @@ class _DriverPageState extends State<DriverPage> {
   void initState() {
     super.initState();
     _loadDriverData();
+    _initializeLocation();
+  }
+
+  @override
+  void dispose() {
+    _locationUpdateTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initializeLocation() async {
+    try {
+      // Check location permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print('Location permissions are denied');
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print('Location permissions are permanently denied');
+        return;
+      }
+
+      // Get current location
+      await _getCurrentLocation();
+
+      // Start periodic location updates
+      _startLocationUpdates();
+    } catch (e) {
+      print('Error initializing location: $e');
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      _currentPosition = position;
+      print('Current location: ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      print('Error getting current location: $e');
+    }
+  }
+
+  void _startLocationUpdates() {
+    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 10), (
+      timer,
+    ) async {
+      await _updateDriverLocation();
+    });
+  }
+
+  Future<void> _updateDriverLocation() async {
+    print('=== LOCATION UPDATE STARTED ===');
+
+    if (_currentPosition == null) {
+      print('No current position, getting fresh location...');
+      await _getCurrentLocation();
+    }
+
+    if (_currentPosition != null) {
+      try {
+        // Truncate coordinates to 6 decimal places
+        double truncatedLatitude = double.parse(
+          _currentPosition!.latitude.toStringAsFixed(6),
+        );
+        double truncatedLongitude = double.parse(
+          _currentPosition!.longitude.toStringAsFixed(6),
+        );
+
+        print(
+          'Sending location update: $truncatedLatitude, $truncatedLongitude',
+        );
+
+        // Use the JWT token from widget (same as other API calls)
+        String? token = widget.jwtToken;
+
+        if (token != null) {
+          print('Token available, making API call...');
+          final response = await http.put(
+            Uri.parse('$baseUrl/api/rides/driver/location/'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({
+              'latitude': truncatedLatitude,
+              'longitude': truncatedLongitude,
+            }),
+          );
+
+          print('API Response: ${response.statusCode}');
+          if (response.statusCode == 200) {
+            print(
+              'Location updated successfully: $truncatedLatitude, $truncatedLongitude',
+            );
+            // Get fresh location for next update
+            await _getCurrentLocation();
+          } else {
+            print('Failed to update location: ${response.statusCode}');
+            print('Response: ${response.body}');
+          }
+        } else {
+          print('ERROR: No JWT token available for location update');
+        }
+      } catch (e) {
+        print('Error updating driver location: $e');
+      }
+    } else {
+      print('ERROR: Could not get current position');
+    }
+
+    print('=== LOCATION UPDATE FINISHED ===');
   }
 
   Future<void> _loadDriverData() async {

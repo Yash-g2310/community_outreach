@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
 import 'profile.dart';
 
 void main() {
@@ -60,6 +61,9 @@ class UserMapScreen extends StatefulWidget {
 class _UserMapScreenState extends State<UserMapScreen> {
   LatLng? _currentPosition;
   bool _isLoading = false;
+  bool _isLoadingDrivers = false;
+  List<Map<String, dynamic>> _nearbyDrivers = [];
+  Timer? _driversUpdateTimer;
 
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -79,6 +83,15 @@ class _UserMapScreenState extends State<UserMapScreen> {
   void initState() {
     super.initState();
     _loadCurrentLocation();
+  }
+
+  @override
+  void dispose() {
+    _driversUpdateTimer?.cancel();
+    _pickupController.dispose();
+    _dropController.dispose();
+    _passengerController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -106,8 +119,88 @@ class _UserMapScreenState extends State<UserMapScreen> {
       });
 
       print('Current location: ${position.latitude}, ${position.longitude}');
+
+      // Load nearby drivers after getting location
+      _loadNearbyDrivers();
+
+      // Start automatic updates every 10 seconds
+      _startDriversAutoUpdate();
     } catch (e) {
       debugPrint('Error getting location: $e');
+    }
+  }
+
+  // Start automatic updates of nearby drivers every 10 seconds
+  void _startDriversAutoUpdate() {
+    _driversUpdateTimer?.cancel(); // Cancel any existing timer
+    _driversUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (_currentPosition != null && widget.accessToken != null && mounted) {
+        _loadNearbyDrivers();
+      }
+    });
+  } // Fetch nearby drivers from API
+
+  Future<void> _loadNearbyDrivers() async {
+    if (_currentPosition == null || widget.accessToken == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingDrivers = true;
+    });
+
+    try {
+      final requestData = {
+        'latitude': _truncateCoordinate(_currentPosition!.latitude),
+        'longitude': _truncateCoordinate(_currentPosition!.longitude),
+        'radius': 5000, // 5km search radius
+      };
+
+      print('=== LOADING NEARBY DRIVERS (${DateTime.now()}) ===');
+      print('Request data: $requestData');
+      print('==============================');
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/passenger/nearby-drivers/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode(requestData),
+      );
+
+      print('Nearby drivers response status: ${response.statusCode}');
+      print('Nearby drivers response body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        final drivers = List<Map<String, dynamic>>.from(
+          responseData['drivers'] ?? [],
+        );
+
+        if (mounted) {
+          setState(() {
+            _nearbyDrivers = drivers;
+          });
+        }
+
+        print('Found ${drivers.length} nearby drivers at ${DateTime.now()}');
+        for (var driver in drivers) {
+          print(
+            'Driver: ${driver['username']} - ${driver['vehicle_number']} at (${driver['latitude']}, ${driver['longitude']}) - ${driver['distance_meters']}m',
+          );
+        }
+      } else {
+        print('Failed to load nearby drivers: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error loading nearby drivers: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingDrivers = false;
+        });
+      }
     }
   }
 
@@ -329,6 +422,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                       ),
                       MarkerLayer(
                         markers: [
+                          // User's current location marker
                           Marker(
                             point: _currentPosition!,
                             width: 60,
@@ -339,6 +433,45 @@ class _UserMapScreenState extends State<UserMapScreen> {
                               size: 40,
                             ),
                           ),
+                          // Nearby drivers markers
+                          ..._nearbyDrivers.map((driver) {
+                            return Marker(
+                              point: LatLng(
+                                driver['latitude'].toDouble(),
+                                driver['longitude'].toDouble(),
+                              ),
+                              width: 80,
+                              height: 80,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      driver['vehicle_number'] ?? 'N/A',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.local_taxi,
+                                    color: Colors.green,
+                                    size: 30,
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
                         ],
                       ),
                     ],
@@ -347,10 +480,99 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
                 // Bottom part (inputs + button)
                 Expanded(
-                  child: Padding(
+                  child: SingleChildScrollView(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
                       children: [
+                        // Nearby drivers info
+                        if (_nearbyDrivers.isNotEmpty) ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.green[50],
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.green[200]!),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.local_taxi,
+                                      color: Colors.green,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      '${_nearbyDrivers.length} E-Rickshaw${_nearbyDrivers.length > 1 ? 's' : ''} nearby',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    if (_isLoadingDrivers) ...[
+                                      const SizedBox(
+                                        width: 12,
+                                        height: 12,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 1.5,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Colors.green,
+                                              ),
+                                        ),
+                                      ),
+                                    ] else ...[
+                                      const Icon(
+                                        Icons.access_time,
+                                        color: Colors.green,
+                                        size: 12,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      const Text(
+                                        'Auto-updating',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.green,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                ...(_nearbyDrivers
+                                    .take(2) // Reduced from 3 to 2
+                                    .map(
+                                      (driver) => Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 3,
+                                        ),
+                                        child: Text(
+                                          '${driver['username']} (${driver['vehicle_number']}) - ${driver['distance_meters'].toStringAsFixed(0)}m',
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                      ),
+                                    )
+                                    .toList()),
+                                if (_nearbyDrivers.length > 2)
+                                  Text(
+                                    'and ${_nearbyDrivers.length - 2} more...',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+
                         TextField(
                           controller: _pickupController,
                           enabled: !_isLoading,
@@ -361,9 +583,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
                               Icons.location_on,
                               color: Colors.green,
                             ),
+                            contentPadding: EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 12,
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                         TextField(
                           controller: _dropController,
                           enabled: !_isLoading,
@@ -374,9 +600,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
                               Icons.location_on,
                               color: Colors.red,
                             ),
+                            contentPadding: EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 12,
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                         TextField(
                           controller: _passengerController,
                           enabled: !_isLoading,
@@ -385,33 +615,41 @@ class _UserMapScreenState extends State<UserMapScreen> {
                             labelText: 'Number of Passengers',
                             border: OutlineInputBorder(),
                             prefixIcon: Icon(Icons.group, color: Colors.blue),
+                            contentPadding: EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 12,
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 20),
-                        ElevatedButton.icon(
-                          onPressed: _isLoading ? null : _createRideRequest,
-                          icon: _isLoading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton.icon(
+                            onPressed: _isLoading ? null : _createRideRequest,
+                            icon: _isLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : const Icon(Icons.notification_important),
-                          label: Text(
-                            _isLoading
-                                ? 'Creating Request...'
-                                : 'Alert Nearby E-Rickshaw',
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            minimumSize: const Size(double.infinity, 50),
-                            backgroundColor: _isLoading ? Colors.grey : null,
+                                  )
+                                : const Icon(Icons.notification_important),
+                            label: Text(
+                              _isLoading
+                                  ? 'Creating Request...'
+                                  : 'Alert Nearby E-Rickshaw',
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _isLoading ? Colors.grey : null,
+                            ),
                           ),
                         ),
+                        const SizedBox(height: 16), // Extra padding at bottom
                       ],
                     ),
                   ),
