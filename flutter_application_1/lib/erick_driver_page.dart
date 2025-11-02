@@ -460,8 +460,10 @@ class _DriverPageState extends State<DriverPage> {
     }
   }
 
-  Future<void> _acceptRide(int rideId) async {
+  Future<void> _acceptRide(Map<String, dynamic> notification) async {
     if (widget.jwtToken == null) return;
+
+    final rideId = notification['id'] as int;
 
     setState(() {
       isLoading = true;
@@ -488,6 +490,29 @@ class _DriverPageState extends State<DriverPage> {
             backgroundColor: Colors.green,
           ),
         );
+
+        // Navigate to ride tracking page
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RideTrackingPage(
+                rideId: notification['id'] as int,
+                pickupAddress: notification['start'] as String,
+                dropoffAddress: notification['end'] as String,
+                numberOfPassengers: notification['people'] as int,
+                passengerName: notification['passenger_name'] as String?,
+                passengerPhone: notification['passenger_phone'] as String?,
+                pickupLat: notification['pickup_lat']?.toDouble(),
+                pickupLng: notification['pickup_lng']?.toDouble(),
+                dropoffLat: notification['dropoff_lat']?.toDouble(),
+                dropoffLng: notification['dropoff_lng']?.toDouble(),
+                accessToken: widget.jwtToken,
+                isDriver: true,
+              ),
+            ),
+          );
+        }
       } else {
         throw Exception('Failed to accept ride: ${response.statusCode}');
       }
@@ -589,34 +614,7 @@ class _DriverPageState extends State<DriverPage> {
                         ? null
                         : () async {
                             Navigator.pop(context);
-                            await _acceptRide(notif['id'] as int);
-
-                            // Navigate to ride tracking page with real data
-                            if (mounted) {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => RideTrackingPage(
-                                    rideId: notif['id'] as int,
-                                    pickupAddress: notif['start'] as String,
-                                    dropoffAddress: notif['end'] as String,
-                                    numberOfPassengers: notif['people'] as int,
-                                    passengerName:
-                                        notif['passenger_name'] as String,
-                                    passengerPhone:
-                                        notif['passenger_phone'] as String,
-                                    pickupLat: notif['pickup_lat']?.toDouble(),
-                                    pickupLng: notif['pickup_lng']?.toDouble(),
-                                    dropoffLat: notif['dropoff_lat']
-                                        ?.toDouble(),
-                                    dropoffLng: notif['dropoff_lng']
-                                        ?.toDouble(),
-                                    accessToken: widget.jwtToken,
-                                    isDriver: true,
-                                  ),
-                                ),
-                              );
-                            }
+                            await _acceptRide(notif);
                           },
                     icon: const Icon(Icons.check_circle, color: Colors.white),
                     label: const Text("Accept"),
