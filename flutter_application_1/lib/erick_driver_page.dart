@@ -813,7 +813,14 @@ class _DriverPageState extends State<DriverPage> {
 
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const ProfilePage()),
+                MaterialPageRoute(
+                  builder: (context) => ProfilePage(
+                    userType: 'Driver',
+                    userName: widget.userData?['username'] ?? 'E-Rick Driver',
+                    userEmail: widget.userData?['email'] ?? 'driver@erick.com',
+                    accessToken: widget.jwtToken,
+                  ),
+                ),
               );
             },
             icon: const Icon(
