@@ -5,8 +5,6 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db.models import Q
 from math import radians, cos, sin, asin, sqrt
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from .models import User, DriverProfile, RideRequest
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
@@ -260,18 +258,7 @@ def create_ride_request(request):
     if serializer.is_valid():
         ride = serializer.save(passenger=request.user)
         
-        # Broadcast to nearby drivers via WebSocket
-        channel_layer = get_channel_layer()
-        ride_data = RideRequestSerializer(ride).data
-        
-        async_to_sync(channel_layer.group_send)(
-            'available_drivers',  # Group name for all available drivers
-            {
-                'type': 'new_ride_request',
-                'ride_data': ride_data
-            }
-        )
-        
+        # ✅ No WebSocket - Drivers will discover via polling
         response_serializer = RideRequestSerializer(ride)
         return Response({
             **response_serializer.data,
@@ -336,30 +323,7 @@ def cancel_ride(request, ride_id):
             ride.driver.driver_profile.status = 'available'
             ride.driver.driver_profile.save()
         
-        # Notify via WebSocket
-        channel_layer = get_channel_layer()
-        
-        # Notify all drivers
-        if ride.status == 'pending':
-            async_to_sync(channel_layer.group_send)(
-                'available_drivers',
-                {
-                    'type': 'ride_cancelled',
-                    'ride_id': ride.id
-                }
-            )
-        
-        # Notify driver if assigned
-        if ride.driver:
-            async_to_sync(channel_layer.group_send)(
-                f'ride_{ride.id}',
-                {
-                    'type': 'status_broadcast',
-                    'status': 'cancelled_user',
-                    'message': 'Ride cancelled by passenger'
-                }
-            )
-        
+        # ✅ No WebSocket - Drivers/Users will see via polling
         return Response({'message': 'Ride cancelled successfully'})
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -383,10 +347,10 @@ def ride_history(request):
     serializer = RideRequestSerializer(rides, many=True)
     return Response({'rides': serializer.data})
 
-@api_view(['GET'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def nearby_rides(request):
-    """Get nearby pending ride requests for drivers"""
+    """Get nearby pending ride requests for drivers (send location in request body)"""
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can access this endpoint'},
@@ -404,15 +368,16 @@ def nearby_rides(request):
     if driver_profile.status != 'available':
         return Response({'rides': []})
     
-    # Get driver's location from query params or profile
-    driver_lat = request.query_params.get('latitude', driver_profile.current_latitude)
-    driver_lon = request.query_params.get('longitude', driver_profile.current_longitude)
-    
-    if not driver_lat or not driver_lon:
+    # Get driver's location from request body
+    serializer = LocationUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
         return Response(
-            {'error': 'Driver location not available'},
+            {'error': 'Please provide latitude and longitude in request body'},
             status=status.HTTP_400_BAD_REQUEST
         )
+    
+    driver_lat = serializer.validated_data['latitude']
+    driver_lon = serializer.validated_data['longitude']
     
     # Get all pending rides
     pending_rides = RideRequest.objects.filter(status='pending')
@@ -433,7 +398,14 @@ def nearby_rides(request):
     # Sort by distance
     nearby_rides_data.sort(key=lambda x: x['distance_from_driver'])
     
-    return Response({'rides': nearby_rides_data})
+    return Response({
+        'rides': nearby_rides_data,
+        'count': len(nearby_rides_data),
+        'driver_location': {
+            'latitude': float(driver_lat),
+            'longitude': float(driver_lon)
+        }
+    })
 
 
 @api_view(['POST'])
@@ -472,30 +444,41 @@ def accept_ride(request, ride_id):
     driver_profile.status = 'busy'
     driver_profile.save()
     
-    # Notify all drivers that this ride has been accepted
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        'available_drivers',
-        {
-            'type': 'ride_accepted',
-            'ride_id': ride.id
-        }
-    )
-    
-    # Notify passenger via ride tracking channel
-    async_to_sync(channel_layer.group_send)(
-        f'ride_{ride.id}',
-        {
-            'type': 'status_broadcast',
-            'status': 'accepted',
-            'message': f'Driver {request.user.username} is on the way!'
-        }
-    )
+    # ✅ No WebSocket - Other drivers will see ride removed via polling
+    # ✅ Passenger will see driver assigned via polling get_current_ride
     
     serializer = RideRequestSerializer(ride)
     return Response({
         'success': True,
-        'ride': serializer.data
+        'ride': serializer.data,
+        'message': 'Ride accepted successfully'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reject_ride(request, ride_id):
+    """Reject a ride request without accepting it"""
+    if request.user.role != 'driver':
+        return Response(
+            {'error': 'Only drivers can reject rides'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    try:
+        ride = RideRequest.objects.get(id=ride_id, status='pending')
+    except RideRequest.DoesNotExist:
+        return Response(
+            {'error': 'Ride not found or already taken'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Just acknowledge - driver doesn't want this ride
+    # No database changes needed, ride stays pending for other drivers
+    return Response({
+        'success': True,
+        'message': 'Ride rejected',
+        'ride_id': ride.id
     })
 
 
@@ -599,7 +582,7 @@ def driver_cancel_ride(request, ride_id):
         ride = RideRequest.objects.get(
             id=ride_id,
             driver=request.user,
-            status__in=['pending', 'accepted', 'in_progress']  # Allow cancelling pending rides that have driver assigned
+            status__in=['accepted', 'in_progress']
         )
     except RideRequest.DoesNotExist:
         return Response(
@@ -609,9 +592,8 @@ def driver_cancel_ride(request, ride_id):
     
     serializer = RideCancelSerializer(data=request.data)
     if serializer.is_valid():
-        ride.status = 'cancelled_driver'
-        ride.cancelled_at = timezone.now()
-        ride.cancellation_reason = serializer.validated_data.get('reason', '')
+        # Change status but keep in pending so other drivers can take it
+        ride.status = 'pending'
         ride.driver = None  # Remove driver assignment
         ride.save()
         
@@ -619,7 +601,12 @@ def driver_cancel_ride(request, ride_id):
         request.user.driver_profile.status = 'available'
         request.user.driver_profile.save()
         
-        return Response({'message': 'Ride cancelled successfully'})
+        # ✅ No WebSocket - Passenger will see via polling
+        
+        return Response({
+            'message': 'Ride cancelled successfully. Ride is now available for other drivers.',
+            'ride_id': ride.id
+        })
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
