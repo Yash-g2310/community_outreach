@@ -271,7 +271,12 @@ def create_ride_request(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_current_ride(request):
-    """Get passenger's current active ride"""
+    """
+    Get passenger's current active ride (POLLING ENDPOINT)
+    
+    User app polls this every 3 seconds to check ride status
+    Returns full driver details when ride is accepted
+    """
     if request.user.role != 'user':
         return Response(
             {'error': 'Only passengers can access this endpoint'},
@@ -281,16 +286,36 @@ def get_current_ride(request):
     ride = RideRequest.objects.filter(
         passenger=request.user,
         status__in=['pending', 'accepted', 'in_progress']
-    ).first()
+    ).select_related('driver__driver_profile').first()
     
     if not ride:
         return Response(
-            {'message': 'No active ride found'},
-            status=status.HTTP_404_NOT_FOUND
+            {
+                'has_active_ride': False,
+                'message': 'No active ride found'
+            },
+            status=status.HTTP_200_OK
         )
     
     serializer = RideRequestSerializer(ride)
-    return Response(serializer.data)
+    response_data = {
+        'has_active_ride': True,
+        'ride': serializer.data,
+        'status': ride.status
+    }
+    
+    # Add helpful messages based on status
+    if ride.status == 'pending':
+        response_data['message'] = 'Searching for nearby drivers...'
+        response_data['driver_assigned'] = False
+    elif ride.status == 'accepted':
+        response_data['message'] = 'Driver is on the way to pick you up!'
+        response_data['driver_assigned'] = True
+    elif ride.status == 'in_progress':
+        response_data['message'] = 'Trip in progress'
+        response_data['driver_assigned'] = True
+    
+    return Response(response_data)
 
 
 @api_view(['POST'])
@@ -508,45 +533,6 @@ def accept_ride(request, ride_id):
     })
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def reject_ride(request, ride_id):
-    """
-    Reject a ride request (frontend only - no backend changes needed)
-    
-    This endpoint exists for logging/analytics purposes only.
-    The ride remains pending for other drivers.
-    """
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can reject rides'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    # Verify ride exists and is still pending
-    try:
-        ride = RideRequest.objects.get(id=ride_id, status='pending')
-    except RideRequest.DoesNotExist:
-        return Response(
-            {
-                'success': False,
-                'error': 'ride_not_found',
-                'message': 'Ride not found or already taken',
-                'ride_id': ride_id
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    # Just acknowledge - no database changes
-    # Frontend will remove this ride from driver's view
-    return Response({
-        'success': True,
-        'message': 'Ride rejected',
-        'ride_id': ride.id,
-        'note': 'Ride remains available for other drivers'
-    })
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def driver_current_ride(request):
@@ -575,7 +561,12 @@ def driver_current_ride(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def start_ride(request, ride_id):
-    """Start a ride (when driver reaches passenger)"""
+    """
+    Start a ride - CALLED BY DRIVER
+    
+    Driver taps "Start Ride" button when passenger gets into the vehicle
+    Changes status: accepted → in_progress
+    """
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can start rides'},
@@ -594,13 +585,25 @@ def start_ride(request, ride_id):
     ride.started_at = timezone.now()
     ride.save()
     
-    return Response({'message': 'Ride started successfully'})
+    return Response({
+        'success': True,
+        'message': 'Ride started successfully',
+        'ride_id': ride.id,
+        'status': 'in_progress',
+        'started_at': ride.started_at
+    })
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def complete_ride(request, ride_id):
-    """Complete a ride"""
+    """
+    Complete a ride - CALLED BY DRIVER
+    
+    Driver taps "Complete Ride" button when passenger reaches destination
+    Changes status: in_progress → completed
+    Makes driver available for next ride
+    """
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can complete rides'},
@@ -630,7 +633,14 @@ def complete_ride(request, ride_id):
     ride.driver.driver_profile.status = 'available'
     ride.driver.driver_profile.save()
     
-    return Response({'message': 'Ride completed successfully'})
+    return Response({
+        'success': True,
+        'message': 'Ride completed successfully',
+        'ride_id': ride.id,
+        'status': 'completed',
+        'completed_at': ride.completed_at,
+        'driver_status': 'available'
+    })
 
 
 @api_view(['POST'])
