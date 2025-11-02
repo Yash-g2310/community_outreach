@@ -229,6 +229,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
               : 'Your Ride #${widget.rideId}',
         ),
         backgroundColor: widget.isDriver ? Colors.blue[700] : Colors.green[700],
+        automaticallyImplyLeading: false, // This removes the back button
       ),
       body: _currentPosition == null
           ? const Center(child: CircularProgressIndicator())
