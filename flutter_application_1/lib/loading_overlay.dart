@@ -29,69 +29,52 @@ class _LoadingOverlayState extends State<LoadingOverlay>
 
   @override
   Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withOpacity(0.5), // Direct dark overlay
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: Container(
-            color: Colors.transparent, // Completely transparent
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 24,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.3), // Darker, more opaque
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.2),
-                    width: 1,
+    return Scaffold(
+      body: Stack(
+        children: [
+          // 🔹 blurred background
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(color: Colors.black.withOpacity(0.3)),
+          ),
+
+          // 🔹 loading card
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 80),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.3)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RotationTransition(
+                    turns: _controller,
+                    child: Image.asset(
+                      'assets/erick.png',
+                      width: 80,
+                      height: 80,
+                    ),
                   ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 🔁 Infinite rotating image
-                    RotationTransition(
-                      turns: _controller,
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.1),
-                        ),
-                        child: Image.asset(
-                          'assets/erick.png', // Using available asset
-                          width: 64,
-                          height: 64,
-                        ),
-                      ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Please Wait !!',
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                      shadows: [Shadow(blurRadius: 4, color: Colors.black)],
                     ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Please Wait !!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 18,
-                        letterSpacing: 0.5,
-                        shadows: [
-                          Shadow(
-                            blurRadius: 8,
-                            color: Colors.black87,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

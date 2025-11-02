@@ -13,7 +13,6 @@ import 'package:flutter_application_1/loading_overlay.dart';
 import 'package:flutter_application_1/user_tracking_page.dart';
 import 'package:flutter_application_1/loading_page2.dart';
 
-
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const UserApp());
@@ -221,77 +220,79 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   // 🧭 NEW: Start ride status checker (every 5s)
   // ============================================================
-void _startRideStatusChecker() {
-  _rideStatusTimer?.cancel();
-  _rideStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-    if (widget.accessToken != null && mounted) {
-      _checkRideStatus();
-    }
-  });
-}
-
-// ============================================================
-// 🧭 Check ride status + log fetched passenger/current data
-// ============================================================
-Future<void> _checkRideStatus() async {
-  try {
-    final response = await http.get(
-      Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
-      headers: {
-        'Authorization': 'Bearer ${widget.accessToken}',
-        'Content-Type': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-
-      // 🪵 Log full data clearly
-      print('\n==============================');
-      print('Fetched /passenger/current data:');
-      print(jsonEncode(data));
-      print('==============================');
-
-      final bool hasActiveRide = data['has_active_ride'] ?? false;
-      final bool driverAssigned = data['driver_assigned'] ?? false;
-
-      // 🪵 Log flags for clarity
-      print('has_active_ride: $hasActiveRide');
-      print('driver_assigned: $driverAssigned');
-
-      if (!hasActiveRide) {
-        print('➡️ No active ride — staying on current page.');
-        return;
-      } else if (hasActiveRide && !driverAssigned) {
-        print('➡️ Active ride, but no driver yet — showing LoadingOverlay.');
-        if (mounted) {
-          Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => RideLoadingScreen(accessToken: widget.accessToken!),
-          ),
-);
-
-        }
-      } else if (hasActiveRide && driverAssigned) {
-        print('✅ Driver assigned — navigating to UserTrackingPage.');
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const UserTrackingPage(),
-            ),
-          );
-        }
+  void _startRideStatusChecker() {
+    _rideStatusTimer?.cancel();
+    _rideStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (widget.accessToken != null && mounted) {
+        _checkRideStatus();
       }
-    } else {
-      print('❌ Failed to fetch ride status: ${response.statusCode}');
-      print('Response body: ${response.body}');
-    }
-  } catch (e) {
-    print('⚠️ Error checking ride status: $e');
+    });
   }
-}
+
+  // ============================================================
+  // 🧭 Check ride status + log fetched passenger/current data
+  // ============================================================
+  Future<void> _checkRideStatus() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        // 🪵 Log full data clearly
+        print('\n==============================');
+        print('Fetched /passenger/current data:');
+        print(jsonEncode(data));
+        print('==============================');
+
+        final bool hasActiveRide = data['has_active_ride'] ?? false;
+        final bool driverAssigned = data['driver_assigned'] ?? false;
+
+        // 🪵 Log flags for clarity
+        print('has_active_ride: $hasActiveRide');
+        print('driver_assigned: $driverAssigned');
+
+        if (!hasActiveRide) {
+          print('➡️ No active ride — staying on current page.');
+          return;
+        } else if (hasActiveRide && !driverAssigned) {
+          print('➡️ Active ride, but no driver yet — showing LoadingOverlay.');
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => RideLoadingScreen(
+                  accessToken: widget.accessToken!,
+                  userName: widget.userName,
+                  userEmail: widget.userEmail,
+                  userRole: widget.userRole,
+                ),
+              ),
+            );
+          }
+        } else if (hasActiveRide && driverAssigned) {
+          print('✅ Driver assigned — navigating to UserTrackingPage.');
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const UserTrackingPage()),
+            );
+          }
+        }
+      } else {
+        print('❌ Failed to fetch ride status: ${response.statusCode}');
+        print('Response body: ${response.body}');
+      }
+    } catch (e) {
+      print('⚠️ Error checking ride status: $e');
+    }
+  }
   // ============================================================
 
   // Create ride request API call
