@@ -86,9 +86,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         if (data['has_active_ride'] == true &&
             data['driver_assigned'] == true) {
           final driver = data['ride']['driver'];
+          final rideStatus = data['ride']['status'] ?? "N/A";
 
           setState(() {
-            _status = data['status'] ?? "N/A";
+            _status = rideStatus;
             _username = driver['username'] ?? "N/A";
             _phoneNumber = driver['phone_number'] ?? "N/A";
             _vehicleNumber = driver['vehicle_number'] ?? "N/A";
@@ -99,12 +100,141 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
               _driverPosition = LatLng(lat, lng);
             }
           });
+
+          // Auto-navigate back if ride is completed or cancelled
+          if (rideStatus == 'completed' || rideStatus == 'cancelled') {
+            Future.delayed(const Duration(seconds: 3), () {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      rideStatus == 'completed'
+                          ? 'Ride completed! Returning to main page...'
+                          : 'Ride was cancelled. Returning to main page...',
+                    ),
+                    backgroundColor: rideStatus == 'completed'
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
+                );
+
+                _updateTimer?.cancel();
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => UserMapScreen(
+                      userName: widget.userName,
+                      userEmail: widget.userEmail,
+                      userRole: widget.userRole,
+                      accessToken: widget.accessToken,
+                    ),
+                  ),
+                );
+              }
+            });
+          }
+        } else {
+          // No active ride or driver not assigned - go back to main page
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'No active ride found. Returning to main page...',
+                ),
+                backgroundColor: Colors.orange,
+              ),
+            );
+
+            _updateTimer?.cancel();
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => UserMapScreen(
+                  userName: widget.userName,
+                  userEmail: widget.userEmail,
+                  userRole: widget.userRole,
+                  accessToken: widget.accessToken,
+                ),
+              ),
+            );
+          }
         }
       } else {
         print("Error fetching driver location: ${response.statusCode}");
       }
     } catch (e) {
       print("Exception: $e");
+    }
+  }
+
+  // ============================================================
+  // 🔍 Get current ride ID for cancellation
+  // ============================================================
+  Future<String?> _getCurrentRideId() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final bool hasActiveRide = data['has_active_ride'] ?? false;
+
+        if (hasActiveRide) {
+          final rideData = data['ride'] ?? {};
+          return rideData['id']?.toString();
+        }
+      }
+      return null;
+    } catch (e) {
+      print('⚠️ Error getting current ride ID: $e');
+      return null;
+    }
+  }
+
+  // ============================================================
+  // 🚫 Cancel current ride
+  // ============================================================
+  Future<bool> _cancelRide() async {
+    try {
+      // First get the current ride ID
+      final rideId = await _getCurrentRideId();
+
+      if (rideId == null) {
+        print('❌ No active ride found to cancel');
+        return false;
+      }
+
+      print('🚫 Attempting to cancel ride $rideId...');
+
+      final response = await http.post(
+        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/$rideId/cancel/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      print('📡 Cancel response status: ${response.statusCode}');
+      print('📦 Cancel response body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        print(
+          '✅ Ride cancelled successfully: ${data['message'] ?? 'No message'}',
+        );
+        return true;
+      } else {
+        print('❌ Failed to cancel ride: ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      print('🚨 Error cancelling ride: $e');
+      return false;
     }
   }
 
@@ -217,6 +347,167 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                           const SizedBox(width: 8),
                           Expanded(child: Text('Vehicle: $_vehicleNumber')),
                         ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Cancel button
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              (_status == 'completed' || _status == 'cancelled')
+                              ? null
+                              : () async {
+                                  print(
+                                    '=== CANCEL BUTTON PRESSED (TRACKING) ===',
+                                  );
+                                  print(
+                                    'User cancelled ride from tracking page',
+                                  );
+                                  print(
+                                    '=======================================',
+                                  );
+
+                                  // Show confirmation dialog first
+                                  final bool?
+                                  shouldCancel = await showDialog<bool>(
+                                    context: context,
+                                    builder: (BuildContext context) {
+                                      return AlertDialog(
+                                        title: const Text('Cancel Ride?'),
+                                        content: const Text(
+                                          'Are you sure you want to cancel this ride? The driver has already been assigned.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('No, Keep Ride'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text(
+                                              'Yes, Cancel',
+                                              style: TextStyle(
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+
+                                  if (shouldCancel != true) return;
+
+                                  // Show loading indicator
+                                  if (mounted) {
+                                    showDialog(
+                                      context: context,
+                                      barrierDismissible: false,
+                                      builder: (BuildContext context) {
+                                        return const AlertDialog(
+                                          content: Row(
+                                            children: [
+                                              CircularProgressIndicator(),
+                                              SizedBox(width: 20),
+                                              Text('Cancelling ride...'),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  }
+
+                                  // Attempt to cancel the ride
+                                  final success = await _cancelRide();
+
+                                  // Close loading dialog
+                                  if (mounted) Navigator.pop(context);
+
+                                  if (success) {
+                                    // Show success message
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Ride cancelled successfully',
+                                          ),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                    }
+
+                                    // Stop polling and navigate back to UserMapScreen
+                                    _updateTimer?.cancel();
+                                    if (mounted) {
+                                      Navigator.pushReplacement(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => UserMapScreen(
+                                            userName: widget.userName,
+                                            userEmail: widget.userEmail,
+                                            userRole: widget.userRole,
+                                            accessToken: widget.accessToken,
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } else {
+                                    // Show error message
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Failed to cancel ride. Please try again.',
+                                          ),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                          icon: Icon(
+                            Icons.cancel,
+                            color:
+                                (_status == 'completed' ||
+                                    _status == 'cancelled')
+                                ? Colors.grey
+                                : Colors.red,
+                          ),
+                          label: Text(
+                            (_status == 'completed')
+                                ? 'Ride Completed'
+                                : (_status == 'cancelled')
+                                ? 'Ride Cancelled'
+                                : 'Cancel Ride',
+                            style: TextStyle(
+                              color:
+                                  (_status == 'completed' ||
+                                      _status == 'cancelled')
+                                  ? Colors.grey
+                                  : Colors.red,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color:
+                                  (_status == 'completed' ||
+                                      _status == 'cancelled')
+                                  ? Colors.grey
+                                  : Colors.red,
+                              width: 1.5,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
                       ),
                     ],
                   ),
