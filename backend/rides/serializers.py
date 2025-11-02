@@ -34,6 +34,16 @@ class DriverProfileSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'vehicle_number', 'status', 
                   'current_latitude', 'current_longitude', 'last_location_update']
         read_only_fields = ['id', 'last_location_update']
+    
+    def to_representation(self, instance):
+        """Ensure user serializer gets request context for URL generation"""
+        representation = super().to_representation(instance)
+        # Pass request context to nested UserSerializer
+        if 'user' in representation and instance.user:
+            request = self.context.get('request')
+            user_serializer = UserSerializer(instance.user, context={'request': request})
+            representation['user'] = user_serializer.data
+        return representation
 
 
 class DriverBasicSerializer(serializers.ModelSerializer):

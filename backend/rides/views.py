@@ -59,7 +59,7 @@ def driver_profile(request):
     if request.method == 'GET':
         try:
             profile = request.user.driver_profile
-            serializer = DriverProfileSerializer(profile)
+            serializer = DriverProfileSerializer(profile, context={'request': request})
             return Response(serializer.data)
         except DriverProfile.DoesNotExist:
             return Response(
@@ -79,7 +79,7 @@ def driver_profile(request):
             profile.vehicle_number = request.data.get('vehicle_number', profile.vehicle_number)
             profile.save()
         
-        serializer = DriverProfileSerializer(profile)
+        serializer = DriverProfileSerializer(profile, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 

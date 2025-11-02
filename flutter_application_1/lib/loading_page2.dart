@@ -163,7 +163,14 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
           _rideStatusTimer?.cancel();
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (context) => const UserTrackingPage()),
+            MaterialPageRoute(
+              builder: (context) => UserTrackingPage(
+                accessToken: widget.accessToken,
+                userName: widget.userName,
+                userEmail: widget.userEmail,
+                userRole: widget.userRole,
+              ),
+            ),
           );
         } else {
           print('⏳ Still waiting for driver assignment...');
