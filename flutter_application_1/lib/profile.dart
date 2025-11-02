@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Extension to capitalize strings
 extension StringCapitalization on String {
@@ -51,6 +54,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   bool _isLoading = true;
+  bool _isUploading = false;
 
   // Dynamic profile fields
   String _displayName = '';
@@ -59,10 +63,20 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _profilePicture;
   String _displayRole = 'User';
   String? _vehicleNumber; // Only for drivers
+  
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
+
+    print('=== WIDGET INITIALIZATION ===');
+    print('widget.userName: "${widget.userName}"');
+    print('widget.userEmail: "${widget.userEmail}"');
+    print('widget.userType: "${widget.userType}"');
+    print('widget.accessToken available: ${widget.accessToken != null}');
+    print('============================');
+
     _displayName = widget.userName;
     _displayEmail = widget.userEmail;
     _displayRole = widget.userType;
@@ -116,76 +130,45 @@ class _ProfilePageState extends State<ProfilePage> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
-        print('=== DETAILED API DATA ANALYSIS ===');
+        print('=== PROCESSING API RESPONSE ===');
         print('Full response data: $data');
-        print('Data type: ${data.runtimeType}');
         print('Data keys: ${data.keys.toList()}');
 
         setState(() {
-          // Handle driver profile structure
-          if (widget.userType.toLowerCase() == 'driver' &&
-              data.containsKey('user')) {
-            final userData = data['user'];
-            print('=== DRIVER PROFILE STRUCTURE ===');
-            print('User data: $userData');
-            print('User data keys: ${userData.keys.toList()}');
-            print('Phone field in userData: "${userData['phone_number']}"');
-            print('Phone field type: ${userData['phone_number'].runtimeType}');
-            print('Phone field is null: ${userData['phone_number'] == null}');
-
-            _displayName = userData['username'] ?? widget.userName;
-            _displayEmail = userData['email'] ?? widget.userEmail;
-
-            // More explicit phone number handling
-            final phoneFromApi = userData['phone_number'];
-            print('Raw phone from API: $phoneFromApi');
-            if (phoneFromApi != null) {
-              _displayPhone = phoneFromApi.toString();
-              print('Phone after toString(): "$_displayPhone"');
-            } else {
-              _displayPhone = 'No phone number available';
-              print('Phone was null, using fallback');
-            }
-
-            _profilePicture = userData['profile_picture'];
-            _displayRole = (userData['role'] ?? widget.userType)
-                .toString()
-                .capitalize();
-            _vehicleNumber = data['vehicle_number']; // Driver-specific field
+          if (widget.userType.toLowerCase() == 'driver') {
+            // Handle driver profile structure (nested user object)
+            _handleDriverProfile(data);
           } else {
-            // Handle regular user profile structure
-            print('=== USER PROFILE STRUCTURE ===');
-            print('Direct data phone field: ${data['phone_number']}');
-            print('Phone field type: ${data['phone_number'].runtimeType}');
-
-            _displayName = data['username'] ?? widget.userName;
-            _displayEmail = data['email'] ?? widget.userEmail;
-            _displayPhone =
-                data['phone_number']?.toString() ?? 'No phone number';
-            _profilePicture = data['profile_picture'];
-            _displayRole = (data['role'] ?? widget.userType)
-                .toString()
-                .capitalize();
+            // Handle user profile structure (flat structure)
+            _handleUserProfile(data);
           }
-
           _isLoading = false;
         });
 
-        print('=== PROFILE UPDATED ===');
+        print('=== PROFILE UPDATE COMPLETE ===');
         print('Name: $_displayName');
         print('Email: $_displayEmail');
-        print('Phone: "$_displayPhone" (Length: ${_displayPhone.length})');
-        print('Phone isEmpty: ${_displayPhone.isEmpty}');
-        print('Phone == "": ${_displayPhone == ""}');
+        print('Phone: "$_displayPhone"');
         print('Role: $_displayRole');
-        print('Profile Picture: $_profilePicture');
-        if (_vehicleNumber != null) print('Vehicle Number: $_vehicleNumber');
-        print('======================');
+        if (_vehicleNumber != null) print('Vehicle: $_vehicleNumber');
+        print('===============================');
       } else {
         print('❌ Failed to fetch profile: ${response.statusCode}');
+        print('Response: ${response.body}');
         setState(() {
           _isLoading = false;
         });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Failed to load profile: HTTP ${response.statusCode}',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     } catch (error) {
       print('❌ Profile fetch error: $error');
@@ -197,7 +180,285 @@ class _ProfilePageState extends State<ProfilePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load profile: ${error.toString()}'),
+            content: Text('Network error: ${error.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Handle driver profile API response structure
+  void _handleDriverProfile(Map<String, dynamic> data) {
+    print('=== PROCESSING DRIVER PROFILE ===');
+    print('Raw API data: $data');
+    print('Data type: ${data.runtimeType}');
+    print('Data keys: ${data.keys.toList()}');
+
+    // Driver profile has nested user object + driver-specific fields
+    final userData = data['user'] as Map<String, dynamic>?;
+
+    if (userData != null) {
+      print('User data found: $userData');
+      print('User data keys: ${userData.keys.toList()}');
+      print(
+        'Raw username: ${userData['username']} (${userData['username'].runtimeType})',
+      );
+      print(
+        'Raw email: ${userData['email']} (${userData['email'].runtimeType})',
+      );
+      print(
+        'Raw phone_number: ${userData['phone_number']} (${userData['phone_number'].runtimeType})',
+      );
+      print('Raw profile_picture_url: ${userData['profile_picture_url']}'); // Updated debug statement
+      print('Raw role: ${userData['role']}');
+
+      // Extract user information from nested object
+      _displayName = userData['username']?.toString() ?? widget.userName;
+      _displayEmail = userData['email']?.toString() ?? widget.userEmail;
+
+      // Special handling for phone number
+      final rawPhone = userData['phone_number'];
+      print('🔍 Phone number debugging:');
+      print('  Raw phone value: $rawPhone');
+      print('  Raw phone type: ${rawPhone.runtimeType}');
+      print('  Is null?: ${rawPhone == null}');
+      print('  Is empty string?: ${rawPhone == ""}');
+      print('  ToString result: "${rawPhone?.toString()}"');
+
+      if (rawPhone == null || rawPhone.toString().trim().isEmpty) {
+        _displayPhone = 'No phone number';
+        print('  → Setting to "No phone number"');
+      } else {
+        _displayPhone = rawPhone.toString().trim();
+        print('  → Setting to "$_displayPhone"');
+      }
+
+      _profilePicture = userData['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+      _displayRole = (userData['role']?.toString() ?? 'driver').capitalize();
+
+      // Extract driver-specific information
+      print(
+        'Raw vehicle_number: ${data['vehicle_number']} (${data['vehicle_number'].runtimeType})',
+      );
+      _vehicleNumber = data['vehicle_number']?.toString();
+
+      print('=== AFTER PROCESSING ===');
+      print('Final _displayName: "$_displayName"');
+      print('Final _displayEmail: "$_displayEmail"');
+      print('Final _displayPhone: "$_displayPhone"');
+      print('Final _displayRole: "$_displayRole"');
+      print('Final _vehicleNumber: "$_vehicleNumber"');
+      print('=======================');
+    } else {
+      print('❌ No user object found in driver profile');
+      print('Available keys in response: ${data.keys.toList()}');
+      // Check if data is flat instead of nested
+      if (data.containsKey('username') || data.containsKey('email')) {
+        print('🔍 Data appears to be flat structure, not nested!');
+        print('Trying flat structure extraction...');
+        _displayName = data['username']?.toString() ?? widget.userName;
+        _displayEmail = data['email']?.toString() ?? widget.userEmail;
+
+        // Special handling for phone number in flat structure
+        final rawPhone = data['phone_number'];
+        print('🔍 Flat structure phone debugging:');
+        print('  Raw phone value: $rawPhone');
+        print('  Raw phone type: ${rawPhone.runtimeType}');
+
+        if (rawPhone == null || rawPhone.toString().trim().isEmpty) {
+          _displayPhone = 'No phone number';
+          print('  → Setting to "No phone number"');
+        } else {
+          _displayPhone = rawPhone.toString().trim();
+          print('  → Setting to "$_displayPhone"');
+        }
+
+        _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+        _displayRole = (data['role']?.toString() ?? 'driver').capitalize();
+        _vehicleNumber = data['vehicle_number']?.toString();
+
+        print('Flat extraction results:');
+        print('  Name: $_displayName');
+        print('  Email: $_displayEmail');
+        print('  Phone: $_displayPhone');
+        print('  Vehicle: $_vehicleNumber');
+      } else {
+        // Fallback to widget defaults
+        _displayName = widget.userName;
+        _displayEmail = widget.userEmail;
+        _displayPhone = 'No phone number';
+        _displayRole = 'Driver';
+        _vehicleNumber = null;
+      }
+    }
+  }
+
+  // Handle user profile API response structure
+  void _handleUserProfile(Map<String, dynamic> data) {
+    print('=== PROCESSING USER PROFILE ===');
+    print('Raw API data: $data');
+    print('Data type: ${data.runtimeType}');
+    print('Data keys: ${data.keys.toList()}');
+    print(
+      'Raw username: ${data['username']} (${data['username'].runtimeType})',
+    );
+    print('Raw email: ${data['email']} (${data['email'].runtimeType})');
+    print(
+      'Raw phone_number: ${data['phone_number']} (${data['phone_number'].runtimeType})',
+    );
+    print('Raw profile_picture_url: ${data['profile_picture_url']}'); // Updated debug statement
+    print('Raw role: ${data['role']}');
+
+    // User profile has flat structure
+    _displayName = data['username']?.toString() ?? widget.userName;
+    _displayEmail = data['email']?.toString() ?? widget.userEmail;
+
+    // Special handling for phone number
+    final rawPhone = data['phone_number'];
+    print('🔍 Phone number debugging:');
+    print('  Raw phone value: $rawPhone');
+    print('  Raw phone type: ${rawPhone.runtimeType}');
+    print('  Is null?: ${rawPhone == null}');
+    print('  Is empty string?: ${rawPhone == ""}');
+    print('  ToString result: "${rawPhone?.toString()}"');
+
+    if (rawPhone == null || rawPhone.toString().trim().isEmpty) {
+      _displayPhone = 'No phone number';
+      print('  → Setting to "No phone number"');
+    } else {
+      _displayPhone = rawPhone.toString().trim();
+      print('  → Setting to "$_displayPhone"');
+    }
+
+    _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+    _displayRole = (data['role']?.toString() ?? 'user').capitalize();
+
+    // Users don't have driver-specific fields
+    _vehicleNumber = null;
+
+    print('=== AFTER PROCESSING ===');
+    print('Final _displayName: "$_displayName"');
+    print('Final _displayEmail: "$_displayEmail"');
+    print('Final _displayPhone: "$_displayPhone"');
+    print('Final _displayRole: "$_displayRole"');
+    print('=======================');
+  }
+
+  // Upload profile picture
+  Future<void> _uploadProfilePicture() async {
+    if (widget.accessToken == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please login to upload profile picture'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      // Pick image - handle web platform differently
+      Uint8List? imageBytes;
+      String fileName = 'profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      if (kIsWeb) {
+        // For web, use XFile and read bytes directly
+        final XFile? image = await _picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 512,
+          maxHeight: 512,
+          imageQuality: 85,
+        );
+
+        if (image == null) return;
+        imageBytes = await image.readAsBytes();
+        fileName = image.name;
+      } else {
+        // For mobile platforms
+        final XFile? image = await _picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 512,
+          maxHeight: 512,
+          imageQuality: 85,
+        );
+
+        if (image == null) return;
+        imageBytes = await image.readAsBytes();
+      }
+
+      setState(() {
+        _isUploading = true;
+      });
+
+      // Prepare multipart request
+      String apiEndpoint = 'http://localhost:8000/api/rides/user/profile/';
+      
+      var request = http.MultipartRequest('PATCH', Uri.parse(apiEndpoint));
+      request.headers['Authorization'] = 'Bearer ${widget.accessToken}';
+      
+      // Add image file
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'profile_picture',
+          imageBytes,
+          filename: fileName,
+        ),
+      );
+
+      print('=== UPLOADING PROFILE PICTURE ===');
+      print('Endpoint: $apiEndpoint');
+      print('File size: ${imageBytes.length} bytes');
+      print('Filename: $fileName');
+
+      // Send request
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      print('Upload Status: ${response.statusCode}');
+      print('Upload Response: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _profilePicture = data['profile_picture_url'];
+          _isUploading = false;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile picture updated successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        setState(() {
+          _isUploading = false;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Upload failed: ${response.statusCode}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (error) {
+      print('❌ Upload error: $error');
+      setState(() {
+        _isUploading = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload error: ${error.toString()}'),
             backgroundColor: Colors.red,
           ),
         );
@@ -265,30 +526,59 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         const SizedBox(height: 10),
                         // Profile Image - dynamic based on API response
-                        CircleAvatar(
-                          radius: 45,
-                          backgroundColor: Colors.white.withOpacity(0.3),
-                          child: _profilePicture != null
-                              ? ClipOval(
-                                  child: Image.network(
-                                    _profilePicture!,
-                                    width: 90,
-                                    height: 90,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return const Icon(
-                                        Icons.person,
-                                        size: 50,
-                                        color: Colors.white,
-                                      );
-                                    },
+                        Stack(
+                          children: [
+                            CircleAvatar(
+                              radius: 45,
+                              backgroundColor: Colors.white.withOpacity(0.3),
+                              child: _isUploading
+                                  ? const CircularProgressIndicator(
+                                      color: Colors.white,
+                                    )
+                                  : _profilePicture != null
+                                      ? ClipOval(
+                                          child: Image.network(
+                                            _profilePicture!,
+                                            width: 90,
+                                            height: 90,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (context, error, stackTrace) {
+                                              return const Icon(
+                                                Icons.person,
+                                                size: 50,
+                                                color: Colors.white,
+                                              );
+                                            },
+                                          ),
+                                        )
+                                      : const Icon(
+                                          Icons.person,
+                                          size: 50,
+                                          color: Colors.white,
+                                        ),
+                            ),
+                            // Edit button
+                            Positioned(
+                              bottom: 0,
+                              right: 0,
+                              child: GestureDetector(
+                                onTap: _isUploading ? null : _uploadProfilePicture,
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.cyan, width: 2),
                                   ),
-                                )
-                              : const Icon(
-                                  Icons.person,
-                                  size: 50,
-                                  color: Colors.white,
+                                  child: const Icon(
+                                    Icons.camera_alt,
+                                    size: 16,
+                                    color: Colors.cyan,
+                                  ),
                                 ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 10),
                         Text(
@@ -477,58 +767,6 @@ class _ProfilePageState extends State<ProfilePage> {
                             ),
                           ),
                       ],
-                    ),
-                  ),
-
-                  // 🔹 Bottom Section (Placeholder for future features)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 10,
-                    ),
-                    child: Container(
-                      width: double.infinity,
-                      height: 200, // Fixed height instead of Expanded
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withOpacity(0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.account_circle_outlined,
-                              size: 64,
-                              color: Colors.cyan,
-                            ),
-                            SizedBox(height: 16),
-                            Text(
-                              "Profile",
-                              style: TextStyle(
-                                color: Colors.cyan,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            SizedBox(height: 8),
-                            Text(
-                              "Complete profile information",
-                              style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ),
                   ),
                   const SizedBox(height: 20), // Add some bottom spacing
