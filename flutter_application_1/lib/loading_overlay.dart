@@ -38,7 +38,10 @@ class _LoadingOverlayState extends State<LoadingOverlay>
             color: Colors.transparent, // Completely transparent
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 24,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(0.3), // Darker, more opaque
                   borderRadius: BorderRadius.circular(20),
