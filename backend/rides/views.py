@@ -59,7 +59,7 @@ def driver_profile(request):
     if request.method == 'GET':
         try:
             profile = request.user.driver_profile
-            serializer = DriverProfileSerializer(profile)
+            serializer = DriverProfileSerializer(profile, context={'request': request})
             return Response(serializer.data)
         except DriverProfile.DoesNotExist:
             return Response(
@@ -79,7 +79,7 @@ def driver_profile(request):
             profile.vehicle_number = request.data.get('vehicle_number', profile.vehicle_number)
             profile.save()
         
-        serializer = DriverProfileSerializer(profile)
+        serializer = DriverProfileSerializer(profile, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
@@ -673,55 +673,3 @@ def driver_cancel_ride(request, ride_id):
         })
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_driver_location(request, ride_id):
-    """Get driver's current location (for passenger)"""
-    try:
-        ride = RideRequest.objects.get(
-            id=ride_id,
-            passenger=request.user,
-            status='accepted'
-        )
-    except RideRequest.DoesNotExist:
-        return Response(
-            {'error': 'Ride not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    if not ride.driver or not hasattr(ride.driver, 'driver_profile'):
-        return Response(
-            {'error': 'Driver not assigned'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    profile = ride.driver.driver_profile
-    return Response({
-        'latitude': profile.current_latitude,
-        'longitude': profile.current_longitude,
-        'last_updated': profile.last_location_update
-    })
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_passenger_location(request, ride_id):
-    """Get passenger's location (for driver)"""
-    try:
-        ride = RideRequest.objects.get(
-            id=ride_id,
-            driver=request.user,
-            status__in=['accepted', 'in_progress']
-        )
-    except RideRequest.DoesNotExist:
-        return Response(
-            {'error': 'Ride not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    return Response({
-        'latitude': ride.pickup_latitude,
-        'longitude': ride.pickup_longitude,
-        'pickup_address': ride.pickup_address
-    })

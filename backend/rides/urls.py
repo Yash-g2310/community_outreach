@@ -26,9 +26,4 @@ urlpatterns = [
     path('handle/<int:ride_id>/accept/', views.accept_ride, name='accept-ride'),
     path('handle/<int:ride_id>/complete/', views.complete_ride, name='complete-ride'),
     path('handle/<int:ride_id>/driver-cancel/', views.driver_cancel_ride, name='driver-cancel-ride'),
-    
-    # Need to verify
-    # Real-time Location Tracking
-    path('handle/<int:ride_id>/driver-location/', views.get_driver_location, name='driver-location-track'),
-    path('handle/<int:ride_id>/passenger-location/', views.get_passenger_location, name='passenger-location'),
 ]

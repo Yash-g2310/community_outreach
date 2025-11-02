@@ -160,6 +160,9 @@ CORS_ALLOWED_ORIGINS = [
 # For development, you can allow all origins
 CORS_ALLOW_ALL_ORIGINS = True
 
+# Allow credentials for CORS
+CORS_ALLOW_CREDENTIALS = True
+
 # JWT Settings
 from datetime import timedelta
 
