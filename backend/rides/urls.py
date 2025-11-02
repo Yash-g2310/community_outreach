@@ -13,12 +13,11 @@ urlpatterns = [
     path('driver/location/', views.update_driver_location, name='driver-location'),
     path('passenger/nearby-drivers/', views.nearby_drivers_for_passenger, name='nearby-drivers'),
     path('driver/nearby-rides/', views.nearby_rides, name='nearby-rides'),
-    # Need to verify
     path('driver/current-ride/', views.driver_current_ride, name='driver-current-ride'),
     
-    # Passenger Ride Management
     path('passenger/request/', views.create_ride_request, name='create-ride'),
     path('passenger/current/', views.get_current_ride, name='current-ride'),
+    # Need to verify
     path('passenger/history/', views.ride_history, name='ride-history'),
     path('passenger/<int:ride_id>/cancel/', views.cancel_ride, name='cancel-ride'),
     

@@ -137,10 +137,9 @@ class _DriverPageState extends State<DriverPage> {
       return;
     }
 
-    if (_currentPosition == null) {
-      print('No current position, getting fresh location...');
-      await _getCurrentLocation();
-    }
+    // ALWAYS get fresh GPS location before sending update
+    print('Getting fresh GPS location...');
+    await _getCurrentLocation();
 
     if (_currentPosition != null) {
       try {
@@ -178,8 +177,6 @@ class _DriverPageState extends State<DriverPage> {
             print(
               'Location updated successfully: $truncatedLatitude, $truncatedLongitude',
             );
-            // Get fresh location for next update
-            await _getCurrentLocation();
           } else {
             print('Failed to update location: ${response.statusCode}');
             print('Response: ${response.body}');
@@ -402,6 +399,15 @@ class _DriverPageState extends State<DriverPage> {
     });
 
     try {
+      // Get current GPS location before updating status
+      if (_currentPosition == null) {
+        await _getCurrentLocation();
+      }
+
+      // Use current GPS location or fallback to null
+      double? latitude = _currentPosition?.latitude;
+      double? longitude = _currentPosition?.longitude;
+
       final response = await http.patch(
         Uri.parse('$baseUrl/api/rides/driver/status/'),
         headers: {
@@ -410,8 +416,10 @@ class _DriverPageState extends State<DriverPage> {
         },
         body: json.encode({
           'status': active ? 'available' : 'offline',
-          'current_latitude': 28.5355, // Default Delhi coordinates
-          'current_longitude': 77.3910,
+          if (latitude != null && longitude != null) ...{
+            'current_latitude': double.parse(latitude.toStringAsFixed(6)),
+            'current_longitude': double.parse(longitude.toStringAsFixed(6)),
+          },
         }),
       );
 
