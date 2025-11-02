@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'profile.dart';
+import 'previous_rides.dart';
 
 // If LoadingOverlayPage and UserTrackingPage are in other files,
 // make sure these imports match your project structure:
@@ -456,31 +457,45 @@ Future<void> _checkRideStatus() async {
           tooltip: 'Logout',
         ),
         actions: [
-          // Profile icon button
-          IconButton(
-            onPressed: () {
-              print('=== NAVIGATION ===');
-              print('Navigating to User Profile');
-              print('==================');
-
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ProfilePage(
-                    userType: widget.userRole?.capitalize() ?? 'User',
-                    userName: widget.userName ?? 'E-Rick User',
-                    userEmail: widget.userEmail ?? 'user@erick.com',
-                    accessToken: widget.accessToken,
-                  ),
-                ),
-              );
-            },
+          // Profile menu: Profile | Previous Rides
+          PopupMenuButton<String>(
             icon: const Icon(
               Icons.account_circle,
               size: 28,
               color: Colors.blueGrey,
             ),
-            tooltip: 'User Profile',
+            onSelected: (value) {
+              if (value == 'profile') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ProfilePage(
+                      userType: widget.userRole?.capitalize() ?? 'User',
+                      userName: widget.userName ?? 'E-Rick User',
+                      userEmail: widget.userEmail ?? 'user@erick.com',
+                      accessToken: widget.accessToken,
+                    ),
+                  ),
+                );
+              } else if (value == 'rides') {
+                if (widget.accessToken == null || widget.accessToken!.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No access token available. Please login to view previous rides.')),
+                  );
+                  return;
+                }
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PreviousRidesPage(jwtToken: widget.accessToken!),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'profile', child: Text('Profile')),
+              const PopupMenuItem(value: 'rides', child: Text('Previous Rides')),
+            ],
           ),
           const SizedBox(width: 8),
         ],

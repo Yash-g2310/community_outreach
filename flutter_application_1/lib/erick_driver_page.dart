@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'profile.dart';
 import 'ride_tracking_page.dart';
+import 'previous_rides.dart';
 
 void main() {
   runApp(const ERickDriverApp());
@@ -804,31 +805,45 @@ class _DriverPageState extends State<DriverPage> {
           tooltip: 'Logout',
         ),
         actions: [
-          // Profile icon button
-          IconButton(
-            onPressed: () {
-              print('=== NAVIGATION ===');
-              print('Navigating from Driver Dashboard to Profile');
-              print('==================');
-
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ProfilePage(
-                    userType: 'Driver',
-                    userName: widget.userData?['username'] ?? 'E-Rick Driver',
-                    userEmail: widget.userData?['email'] ?? 'driver@erick.com',
-                    accessToken: widget.jwtToken,
-                  ),
-                ),
-              );
-            },
+          // Profile menu button (Profile | Previous Rides)
+          PopupMenuButton<String>(
             icon: const Icon(
               Icons.account_circle,
               size: 28,
               color: Colors.blueGrey,
             ),
-            tooltip: 'Driver Profile',
+            onSelected: (value) {
+              if (value == 'profile') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ProfilePage(
+                      userType: 'Driver',
+                      userName: widget.userData?['username'] ?? 'E-Rick Driver',
+                      userEmail: widget.userData?['email'] ?? 'driver@erick.com',
+                      accessToken: widget.jwtToken,
+                    ),
+                  ),
+                );
+              } else if (value == 'rides') {
+                if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No access token available. Please login to view previous rides.')),
+                  );
+                  return;
+                }
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PreviousRidesPage(jwtToken: widget.jwtToken!),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'profile', child: Text('Profile')),
+              const PopupMenuItem(value: 'rides', child: Text('Previous Rides')),
+            ],
           ),
           const SizedBox(width: 8),
         ],
