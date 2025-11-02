@@ -567,3 +567,28 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     );
   }
 }
+
+void main() {
+  runApp(
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: RideTrackingPage(
+        rideId: 1,
+        pickupAddress: "Connaught Place, Delhi",
+        dropoffAddress: "Noida Sector 62",
+        numberOfPassengers: 2,
+        passengerName: "Yash",
+        passengerPhone: "9876543210",
+        driverName: "Apurv",
+        driverPhone: "9999999999",
+        vehicleNumber: "DL01AB1234",
+        pickupLat: 28.6149,
+        pickupLng: 77.2090,
+        dropoffLat: 28.6200,
+        dropoffLng: 77.3700,
+        accessToken: "dummy_token",
+        isDriver: true,
+      ),
+    ),
+  );
+}
