@@ -102,7 +102,7 @@ class _DriverPageState extends State<DriverPage> {
       }
     } catch (e) {
       print('Driver profile error: $e');
-      throw e;
+      rethrow;
     }
   }
 

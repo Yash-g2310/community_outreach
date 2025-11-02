@@ -13,7 +13,7 @@ class User(AbstractUser):
     # Role & basic info
     role = models.CharField(max_length=10, choices=ROLE_CHOICES)
     phone_number = models.CharField(max_length=15)
-    profile_picture = models.URLField(max_length=500, null=True, blank=True)
+    profile_picture = models.ImageField(upload_to='profile_pictures/', null=True, blank=True)
     
     # Ride statistics (common for both user and driver)
     completed_rides = models.IntegerField(default=0)
