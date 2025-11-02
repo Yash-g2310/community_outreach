@@ -85,8 +85,7 @@ class _DriverPageState extends State<DriverPage> {
       // Get current location
       await _getCurrentLocation();
 
-      // Start periodic location updates
-      _startLocationUpdates();
+      // Location updates will be started after loading driver profile
     } catch (e) {
       print('Error initializing location: $e');
     }
@@ -111,15 +110,33 @@ class _DriverPageState extends State<DriverPage> {
   }
 
   void _startLocationUpdates() {
+    // Cancel existing timer if any
+    _locationUpdateTimer?.cancel();
+
     _locationUpdateTimer = Timer.periodic(const Duration(seconds: 10), (
       timer,
     ) async {
       await _updateDriverLocation();
     });
+
+    print('Location update timer started');
+  }
+
+  void _stopLocationUpdates() {
+    _locationUpdateTimer?.cancel();
+    _locationUpdateTimer = null;
+    print('Location update timer stopped');
   }
 
   Future<void> _updateDriverLocation() async {
     print('=== LOCATION UPDATE STARTED ===');
+
+    // Check if driver is online before sending location updates
+    if (!isActive) {
+      print('Driver is offline - skipping location update');
+      print('=== LOCATION UPDATE SKIPPED ===');
+      return;
+    }
 
     if (_currentPosition == null) {
       print('No current position, getting fresh location...');
@@ -197,6 +214,11 @@ class _DriverPageState extends State<DriverPage> {
     try {
       // Load driver profile and nearby rides
       await Future.wait([_fetchDriverProfile(), _fetchNearbyRides()]);
+
+      // Start location updates if driver is active
+      if (isActive) {
+        _startLocationUpdates();
+      }
     } catch (e) {
       setState(() {
         errorMessage = 'Error loading driver data: $e';
@@ -311,10 +333,14 @@ class _DriverPageState extends State<DriverPage> {
           isActive = active;
         });
 
-        // Refresh nearby rides when status changes
+        // Start or stop location updates based on status
         if (active) {
+          _startLocationUpdates();
+          // Refresh nearby rides when going online
           await _fetchNearbyRides();
         } else {
+          _stopLocationUpdates();
+          // Clear notifications when going offline
           setState(() {
             notifications = [];
           });
