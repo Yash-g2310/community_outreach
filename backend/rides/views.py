@@ -28,19 +28,19 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     r = 6371000
     return c * r
 
-@api_view(['GET', 'PUT', 'PATCH'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def user_profile(request):
     """Get or update user profile (including profile picture)"""
     user = request.user
     
     if request.method == 'GET':
-        serializer = UserSerializer(user)
+        serializer = UserSerializer(user, context={'request': request})
         return Response(serializer.data)
     
-    elif request.method in ['PUT', 'PATCH']:
+    elif request.method in ['POST', 'PUT', 'PATCH']:
         # Handle both JSON and multipart/form-data
-        serializer = UserSerializer(user, data=request.data, partial=True)
+        serializer = UserSerializer(user, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -297,7 +297,7 @@ def get_current_ride(request):
             status=status.HTTP_200_OK
         )
     
-    serializer = RideRequestSerializer(ride)
+    serializer = RideRequestSerializer(ride, context={'request': request})
     response_data = {
         'has_active_ride': True,
         'ride': serializer.data,
@@ -384,8 +384,34 @@ def ride_history(request):
         status__in=['completed', 'cancelled_user', 'cancelled_driver']
     ).order_by('-requested_at')[:20]  # Last 20 rides
     
-    serializer = RideRequestSerializer(rides, many=True)
-    return Response({'rides': serializer.data})
+    serializer = RideRequestSerializer(rides, many=True, context={'request': request})
+    return Response({
+        'rides': serializer.data,
+        'count': len(serializer.data)
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def driver_ride_history(request):
+    """Get driver's ride history (completed and cancelled rides)"""
+    if request.user.role != 'driver':
+        return Response(
+            {'error': 'Only drivers can access ride history'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    rides = RideRequest.objects.filter(
+        driver=request.user,
+        status__in=['completed', 'cancelled_user', 'cancelled_driver']
+    ).order_by('-requested_at')[:20]  # Last 20 rides
+    
+    serializer = RideRequestSerializer(rides, many=True, context={'request': request})
+    return Response({
+        'rides': serializer.data,
+        'count': len(serializer.data)
+    })
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -607,7 +633,7 @@ def complete_ride(request, ride_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def driver_cancel_ride(request, ride_id):
-    """Cancel ride by driver - puts ride back to pending for other drivers"""
+    """Cancel ride by driver - marks ride as cancelled_driver"""
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can cancel rides'},
@@ -628,9 +654,10 @@ def driver_cancel_ride(request, ride_id):
     
     serializer = RideCancelSerializer(data=request.data)
     if serializer.is_valid():
-        # Change status but keep in pending so other drivers can take it
-        ride.status = 'pending'
-        ride.driver = None  # Remove driver assignment
+        # Mark ride as cancelled by driver
+        ride.status = 'cancelled_driver'
+        ride.cancelled_at = timezone.now()
+        ride.cancellation_reason = serializer.validated_data.get('reason', 'Cancelled by driver')
         ride.save()
         
         # Make driver available again
@@ -639,8 +666,10 @@ def driver_cancel_ride(request, ride_id):
         
         return Response({
             'success': True,
-            'message': 'Ride cancelled successfully. Ride is now available for other drivers.',
-            'ride_id': ride.id
+            'message': 'Ride cancelled successfully',
+            'ride_id': ride.id,
+            'status': 'cancelled_driver',
+            'cancelled_at': ride.cancelled_at
         })
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
