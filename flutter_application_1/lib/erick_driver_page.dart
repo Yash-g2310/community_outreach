@@ -503,10 +503,18 @@ class _DriverPageState extends State<DriverPage> {
                 numberOfPassengers: notification['people'] as int,
                 passengerName: notification['passenger_name'] as String?,
                 passengerPhone: notification['passenger_phone'] as String?,
-                pickupLat: notification['pickup_lat']?.toDouble(),
-                pickupLng: notification['pickup_lng']?.toDouble(),
-                dropoffLat: notification['dropoff_lat']?.toDouble(),
-                dropoffLng: notification['dropoff_lng']?.toDouble(),
+                pickupLat: notification['pickup_lat'] != null
+                    ? double.tryParse(notification['pickup_lat'].toString())
+                    : null,
+                pickupLng: notification['pickup_lng'] != null
+                    ? double.tryParse(notification['pickup_lng'].toString())
+                    : null,
+                dropoffLat: notification['dropoff_lat'] != null
+                    ? double.tryParse(notification['dropoff_lat'].toString())
+                    : null,
+                dropoffLng: notification['dropoff_lng'] != null
+                    ? double.tryParse(notification['dropoff_lng'].toString())
+                    : null,
                 accessToken: widget.jwtToken,
                 isDriver: true,
               ),
