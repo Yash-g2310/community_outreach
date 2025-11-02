@@ -6,8 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'profile.dart';
-// If you plan to show a map, later add:
-// import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'ride_tracking_page.dart';
 
 void main() {
   runApp(const ERickDriverApp());
@@ -312,11 +311,25 @@ class _DriverPageState extends State<DriverPage> {
           position?.longitude ??
           double.tryParse(driverProfile!['current_longitude'].toString());
 
+      // Ensure we have valid coordinates
+      if (lat == null || lng == null) {
+        print('ERROR: Cannot get valid coordinates - lat: $lat, lng: $lng');
+        setState(() {
+          notifications = [];
+        });
+        return;
+      }
+
       // Round to 6 decimal places to match backend expectations
       final requestBody = {
-        'latitude': lat != null ? double.parse(lat.toStringAsFixed(6)) : null,
-        'longitude': lng != null ? double.parse(lng.toStringAsFixed(6)) : null,
+        'latitude': double.parse(lat.toStringAsFixed(6)),
+        'longitude': double.parse(lng.toStringAsFixed(6)),
       };
+
+      print('Raw coordinates: lat=$lat, lng=$lng');
+      print(
+        'Rounded coordinates: lat=${requestBody['latitude']}, lng=${requestBody['longitude']}',
+      );
 
       print(
         'Fetching nearby rides with location: ${requestBody['latitude']}, ${requestBody['longitude']}',
@@ -578,24 +591,28 @@ class _DriverPageState extends State<DriverPage> {
                             Navigator.pop(context);
                             await _acceptRide(notif['id'] as int);
 
-                            // Navigate to assignment page with real data
+                            // Navigate to ride tracking page with real data
                             if (mounted) {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => DriverAssignmentPage(
-                                    requestId: notif['id'] as int,
-                                    pickupLabel: notif['start'] as String,
-                                    dropLabel: notif['end'] as String,
-                                    pax: notif['people'] as int,
+                                  builder: (_) => RideTrackingPage(
+                                    rideId: notif['id'] as int,
+                                    pickupAddress: notif['start'] as String,
+                                    dropoffAddress: notif['end'] as String,
+                                    numberOfPassengers: notif['people'] as int,
                                     passengerName:
                                         notif['passenger_name'] as String,
                                     passengerPhone:
                                         notif['passenger_phone'] as String,
-                                    pickupLat: notif['pickup_lat'],
-                                    pickupLng: notif['pickup_lng'],
-                                    dropoffLat: notif['dropoff_lat'],
-                                    dropoffLng: notif['dropoff_lng'],
+                                    pickupLat: notif['pickup_lat']?.toDouble(),
+                                    pickupLng: notif['pickup_lng']?.toDouble(),
+                                    dropoffLat: notif['dropoff_lat']
+                                        ?.toDouble(),
+                                    dropoffLng: notif['dropoff_lng']
+                                        ?.toDouble(),
+                                    accessToken: widget.jwtToken,
+                                    isDriver: true,
                                   ),
                                 ),
                               );
@@ -824,51 +841,57 @@ class _DriverPageState extends State<DriverPage> {
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  ElevatedButton.icon(
-                                    onPressed: isLoading
-                                        ? null
-                                        : () => _updateDriverStatus(true),
-                                    icon: Icon(
-                                      Icons.circle,
-                                      color: isLoading
-                                          ? Colors.grey
-                                          : Colors.green,
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      isLoading ? 'Updating...' : 'Go Online',
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: isActive
-                                          ? Colors.green[100]
-                                          : null,
-                                      foregroundColor: isActive
-                                          ? Colors.green[800]
-                                          : null,
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: isLoading
+                                          ? null
+                                          : () => _updateDriverStatus(true),
+                                      icon: Icon(
+                                        Icons.circle,
+                                        color: isLoading
+                                            ? Colors.grey
+                                            : Colors.green,
+                                        size: 18,
+                                      ),
+                                      label: Text(
+                                        isLoading ? 'Updating...' : 'Go Online',
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: isActive
+                                            ? Colors.green[100]
+                                            : null,
+                                        foregroundColor: isActive
+                                            ? Colors.green[800]
+                                            : null,
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(width: 12),
-                                  ElevatedButton.icon(
-                                    onPressed: isLoading
-                                        ? null
-                                        : () => _updateDriverStatus(false),
-                                    icon: Icon(
-                                      Icons.circle,
-                                      color: isLoading
-                                          ? Colors.grey
-                                          : Colors.red,
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      isLoading ? 'Updating...' : 'Go Offline',
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: !isActive
-                                          ? Colors.red[100]
-                                          : null,
-                                      foregroundColor: !isActive
-                                          ? Colors.red[800]
-                                          : null,
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: isLoading
+                                          ? null
+                                          : () => _updateDriverStatus(false),
+                                      icon: Icon(
+                                        Icons.circle,
+                                        color: isLoading
+                                            ? Colors.grey
+                                            : Colors.red,
+                                        size: 18,
+                                      ),
+                                      label: Text(
+                                        isLoading
+                                            ? 'Updating...'
+                                            : 'Go Offline',
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: !isActive
+                                            ? Colors.red[100]
+                                            : null,
+                                        foregroundColor: !isActive
+                                            ? Colors.red[800]
+                                            : null,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -1151,216 +1174,6 @@ class _DriverPageState extends State<DriverPage> {
                 ),
               ],
             ),
-    );
-  }
-}
-
-// NEW SCREEN: shows assignment and will host live map/location
-class DriverAssignmentPage extends StatefulWidget {
-  final int requestId;
-  final String pickupLabel;
-  final String dropLabel;
-  final int pax;
-  final String? passengerName;
-  final String? passengerPhone;
-  final dynamic pickupLat;
-  final dynamic pickupLng;
-  final dynamic dropoffLat;
-  final dynamic dropoffLng;
-
-  const DriverAssignmentPage({
-    super.key,
-    required this.requestId,
-    required this.pickupLabel,
-    required this.dropLabel,
-    required this.pax,
-    this.passengerName,
-    this.passengerPhone,
-    this.pickupLat,
-    this.pickupLng,
-    this.dropoffLat,
-    this.dropoffLng,
-  });
-
-  @override
-  State<DriverAssignmentPage> createState() => _DriverAssignmentPageState();
-}
-
-class _DriverAssignmentPageState extends State<DriverAssignmentPage> {
-  // TODO: Add GoogleMap controller and live stream subscription here.
-  // Example placeholders:
-  // GoogleMapController? _mapCtrl;
-  // StreamSubscription? _locationSub;
-
-  @override
-  void initState() {
-    super.initState();
-    // TODO: Subscribe to backend stream with widget.requestId to receive rider location updates.
-    // Example with Firebase/WS: _locationSub = riderLocationStream(widget.requestId).listen((pos){ setState(...); });
-  }
-
-  @override
-  void dispose() {
-    // _locationSub?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Assigned Ride')),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Header/summary card with enhanced passenger info
-          Container(
-            color: Colors.blueGrey[50],
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Ride #${widget.requestId}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.green,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        'ACCEPTED',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Passenger info
-                if (widget.passengerName != null) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.person, size: 16),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Passenger: ${widget.passengerName}',
-                        style: const TextStyle(fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                ],
-
-                if (widget.passengerPhone != null &&
-                    widget.passengerPhone!.isNotEmpty) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.phone, size: 16),
-                      const SizedBox(width: 8),
-                      Text('Phone: ${widget.passengerPhone}'),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                ],
-
-                Row(
-                  children: [
-                    const Icon(Icons.group, size: 16),
-                    const SizedBox(width: 8),
-                    Text('Passengers: ${widget.pax}'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // Location info
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.location_on,
-                      color: Colors.green,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text('Pickup: ${widget.pickupLabel}')),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.location_on, color: Colors.red, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text('Drop: ${widget.dropLabel}')),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          // Map placeholder; replace with GoogleMap later
-          Expanded(
-            child: Container(
-              color: Colors.grey[200],
-              alignment: Alignment.center,
-              child: const Text(
-                'Map goes here (driver + rider live markers)',
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-
-          // Actions
-          Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      // Arrived → could notify backend
-                    },
-                    child: const Text('Arrived'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      // Start trip → switch to drop routing, notify backend
-                    },
-                    child: const Text('Start Trip'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      // Complete trip → pop back to home
-                      Navigator.pop(context);
-                    },
-                    child: const Text('Complete'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
