@@ -32,9 +32,20 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
+  static const bool _enableLoginDebugLogs = true;
+
+  static const String _loginEndpoint = 'http://localhost:8000/api/auth/login/';
+  static const String _sessionBootstrapEndpoint =
+      'http://localhost:8000/api/auth/bootstrap-session/';
+
   // Text controllers for login form
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+
+  void _logLogin(String message, {String tag = 'LOGIN'}) {
+    if (!_enableLoginDebugLogs) return;
+    debugPrint('[$tag] $message');
+  }
 
   @override
   void dispose() {
@@ -62,12 +73,13 @@ class _LoginScreenState extends State<LoginScreen> {
       _isLoading = true;
     });
 
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
-      // TODO: Implement actual API call to Django backend
       await _loginWithServer(username, password);
     } catch (error) {
-      print('Login error: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
+      _logLogin('Login error: $error', tag: 'LOGIN_ERROR');
+      messenger.showSnackBar(
         SnackBar(
           content: Text('Login failed: ${error.toString()}'),
           backgroundColor: Colors.red,
@@ -84,23 +96,24 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // Login with Django API
   Future<void> _loginWithServer(String username, String password) async {
-    print('=== LOGIN REQUEST ===');
-    print('Username: $username');
-    print('Password: [hidden]');
-    print('API Endpoint: http://localhost:8000/api/auth/login/');
-    print('====================');
+    final requestId = DateTime.now().millisecondsSinceEpoch;
+    final stopwatch = Stopwatch()..start();
+    _logLogin(
+      '($requestId) LOGIN REQUEST :: username=$username endpoint=$_loginEndpoint',
+    );
 
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:8000/api/auth/login/'),
+        Uri.parse(_loginEndpoint),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'username': username, 'password': password}),
       );
 
-      print('=== API RESPONSE ===');
-      print('Status Code: ${response.statusCode}');
-      print('Response Body: ${response.body}');
-      print('===================');
+      stopwatch.stop();
+      _logLogin(
+        '($requestId) API RESPONSE :: status=${response.statusCode} duration=${stopwatch.elapsedMilliseconds}ms',
+      );
+      _logLogin('($requestId) Body=${response.body}', tag: 'LOGIN_HTTP');
 
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
@@ -110,14 +123,48 @@ class _LoginScreenState extends State<LoginScreen> {
         final userRole = userData['role'];
         final userName = userData['username'];
         final userEmail = userData['email'];
-        final tokens = responseData['tokens'];
+        final tokens = Map<String, dynamic>.from(responseData['tokens'] ?? {});
+        final accessToken = tokens['access']?.toString();
+        final refreshToken = tokens['refresh']?.toString();
+        if (accessToken == null || accessToken.isEmpty) {
+          throw Exception('Login response missing access token');
+        }
 
-        print('=== LOGIN SUCCESS ===');
-        print('User Role: $userRole');
-        print('User Name: $userName');
-        print('User Email: $userEmail');
-        print('Access Token: ${tokens['access'].substring(0, 20)}...');
-        print('====================');
+        final rawCookieHeader = response.headers['set-cookie'];
+        String? sessionId = _extractCookieValue(rawCookieHeader, 'sessionid');
+        String? csrfToken = _extractCookieValue(rawCookieHeader, 'csrftoken');
+
+        if (sessionId == null || csrfToken == null) {
+          _logLogin(
+            '($requestId) Session cookies missing from login response; invoking bootstrap endpoint',
+            tag: 'SESSION',
+          );
+          final bootstrapData = await _bootstrapSession(accessToken);
+          sessionId ??= bootstrapData['sessionid'];
+          csrfToken ??= bootstrapData['csrftoken'];
+        }
+
+        if (sessionId == null) {
+          throw Exception(
+            'Unable to establish session for realtime updates. Please retry login.',
+          );
+        }
+        if (csrfToken == null) {
+          _logLogin(
+            '($requestId) WARNING :: CSRF token missing even after bootstrap; PATCH/POST endpoints may fail',
+            tag: 'LOGIN_COOKIE',
+          );
+        }
+
+        final String confirmedSessionId = sessionId;
+        final String? confirmedCsrfToken = csrfToken;
+
+        final tokenPreview = accessToken.length > 16
+            ? '${accessToken.substring(0, 16)}...'
+            : accessToken;
+        _logLogin(
+          '($requestId) LOGIN SUCCESS :: role=$userRole user=$userName email=$userEmail accessPreview=$tokenPreview session=${confirmedSessionId.isNotEmpty} csrf=${confirmedCsrfToken != null}',
+        );
 
         // Show success message
         if (mounted) {
@@ -129,24 +176,34 @@ class _LoginScreenState extends State<LoginScreen> {
           );
 
           // Navigate based on role from server response
-          _navigateBasedOnRole(userRole, userName, userEmail, tokens['access']);
+          _navigateBasedOnRole(
+            role: userRole,
+            userName: userName,
+            userEmail: userEmail,
+            accessToken: accessToken,
+            extraContext: {
+              'sessionId': confirmedSessionId,
+              'csrfToken': confirmedCsrfToken,
+              'refreshToken': refreshToken,
+            },
+            rawUserData: Map<String, dynamic>.from(userData ?? {}),
+          );
         }
       } else {
         // Handle login failure
         final responseData = jsonDecode(response.body);
         final errorMessage = responseData['error'] ?? 'Login failed';
 
-        print('=== LOGIN FAILED ===');
-        print('Error: $errorMessage');
-        print('===================');
+        _logLogin(
+          '($requestId) LOGIN FAILED :: $errorMessage',
+          tag: 'LOGIN_FAIL',
+        );
 
         throw Exception(errorMessage);
       }
-    } catch (error) {
-      print('=== API ERROR ===');
-      print('Error Type: ${error.runtimeType}');
-      print('Error Message: $error');
-      print('=================');
+    } catch (error, stackTrace) {
+      _logLogin('($requestId) API ERROR :: ${error.runtimeType} -> $error');
+      _logLogin(stackTrace.toString(), tag: 'LOGIN_STACK');
 
       // Re-throw with user-friendly message
       if (error.toString().contains('Connection refused') ||
@@ -160,11 +217,40 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<Map<String, String?>> _bootstrapSession(String accessToken) async {
+    try {
+      final response = await http.post(
+        Uri.parse(_sessionBootstrapEndpoint),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+      );
+
+      _logLogin(
+        'SESSION BOOTSTRAP :: status=${response.statusCode}',
+        tag: 'SESSION',
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {
+          'sessionid': data['sessionid']?.toString(),
+          'csrftoken': data['csrftoken']?.toString(),
+        };
+      } else {
+        _logLogin('Bootstrap failed body=${response.body}', tag: 'SESSION');
+      }
+    } catch (error, stackTrace) {
+      _logLogin('Bootstrap error: $error', tag: 'SESSION_ERROR');
+      _logLogin(stackTrace.toString(), tag: 'SESSION_STACK');
+    }
+
+    return {};
+  }
+
   // Navigate to signup page
   void _navigateToSignup() {
-    print('=== NAVIGATION ===');
-    print('Navigating to Sign Up Page');
-    print('==================');
+    _logLogin('Navigating to Sign Up Page', tag: 'NAVIGATION');
 
     Navigator.push(
       context,
@@ -173,24 +259,33 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Navigate to appropriate page based on user role
-  void _navigateBasedOnRole(
-    String role,
-    String userName, [
+  void _navigateBasedOnRole({
+    required String role,
+    required String userName,
     String? userEmail,
     String? accessToken,
-  ]) {
-    print('=== NAVIGATION ===');
-    print('Navigating to ${role.toUpperCase()} dashboard');
-    print('User: $userName');
-    if (userEmail != null) print('Email: $userEmail');
-    print('==================');
+    Map<String, dynamic>? extraContext,
+    Map<String, dynamic>? rawUserData,
+  }) {
+    _logLogin(
+      'Navigating -> ${role.toUpperCase()} (user=$userName, email=${userEmail ?? 'n/a'})',
+      tag: 'NAVIGATION',
+    );
 
     Widget destinationPage;
 
     if (role == 'driver') {
       destinationPage = DriverPage(
         jwtToken: accessToken,
-        userData: {'username': userName, 'email': userEmail, 'role': role},
+        sessionId: extraContext?['sessionId'] as String?,
+        csrfToken: extraContext?['csrfToken'] as String?,
+        refreshToken: extraContext?['refreshToken'] as String?,
+        userData: {
+          'username': userName,
+          'email': userEmail,
+          'role': role,
+          if (rawUserData != null) ...rawUserData,
+        },
       );
     } else {
       destinationPage = UserMapScreen(
@@ -206,6 +301,13 @@ class _LoginScreenState extends State<LoginScreen> {
       context,
       MaterialPageRoute(builder: (context) => destinationPage),
     );
+  }
+
+  String? _extractCookieValue(String? headerValue, String cookieName) {
+    if (headerValue == null) return null;
+    final regex = RegExp('${RegExp.escape(cookieName)}=([^;]+)');
+    final match = regex.firstMatch(headerValue);
+    return match?.group(1);
   }
 
   @override

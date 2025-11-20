@@ -66,11 +66,13 @@ class _SignupPageState extends State<SignupPage> {
       _isLoading = true;
     });
 
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
       await _signupWithServer();
     } catch (error) {
       print('Signup error: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text('Signup failed: ${error.toString()}'),
           backgroundColor: Colors.red,
@@ -122,6 +124,9 @@ class _SignupPageState extends State<SignupPage> {
 
   // Signup with Django API
   Future<void> _signupWithServer() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
     print('=== SIGNUP REQUEST ===');
     print('Username: ${_usernameController.text}');
     print('Email: ${_emailController.text}');
@@ -184,20 +189,21 @@ class _SignupPageState extends State<SignupPage> {
         }
 
         // Show success message
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Welcome $userName! Account created successfully. Please log in.',
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
+        if (!mounted) return;
 
-          // Navigate back to login page
-          Navigator.pop(context);
-        }
+        // Show success message
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Welcome $userName! Account created successfully. Please log in.',
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+
+        // Navigate back to login page
+        navigator.pop();
       } else if (response.statusCode == 400) {
         // Handle validation errors
         final responseData = jsonDecode(response.body);
@@ -261,9 +267,9 @@ class _SignupPageState extends State<SignupPage> {
         'PATCH',
         Uri.parse('http://localhost:8000/api/rides/user/profile/'),
       );
-      
+
       request.headers['Authorization'] = 'Bearer $accessToken';
-      
+
       // Add image file
       request.files.add(
         http.MultipartFile.fromBytes(
@@ -328,31 +334,28 @@ class _SignupPageState extends State<SignupPage> {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 8),
-                  Row(
+                  Wrap(
+                    spacing: 12,
                     children: [
-                      Expanded(
-                        child: RadioListTile<String>(
-                          title: const Text('User'),
-                          value: 'user',
-                          groupValue: _selectedRole,
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedRole = value!;
-                            });
-                          },
-                        ),
+                      ChoiceChip(
+                        label: const Text('User'),
+                        selected: _selectedRole == 'user',
+                        onSelected: (selected) {
+                          if (!selected) return;
+                          setState(() {
+                            _selectedRole = 'user';
+                          });
+                        },
                       ),
-                      Expanded(
-                        child: RadioListTile<String>(
-                          title: const Text('Driver'),
-                          value: 'driver',
-                          groupValue: _selectedRole,
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedRole = value!;
-                            });
-                          },
-                        ),
+                      ChoiceChip(
+                        label: const Text('Driver'),
+                        selected: _selectedRole == 'driver',
+                        onSelected: (selected) {
+                          if (!selected) return;
+                          setState(() {
+                            _selectedRole = 'driver';
+                          });
+                        },
                       ),
                     ],
                   ),

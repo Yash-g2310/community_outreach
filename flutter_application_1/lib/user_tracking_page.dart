@@ -5,6 +5,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'utils/socket_channel_factory.dart';
 import 'user_page.dart'; // ✅ for navigation back to user page
 
 class UserTrackingPage extends StatefulWidget {
@@ -34,7 +36,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   String _phoneNumber = "-";
   String _vehicleNumber = "-";
 
-  Timer? _updateTimer;
+  WebSocketChannel? _rideTrackingSocket;
+  StreamSubscription? _socketSubscription;
+  String? _currentRideId;
 
   @override
   void initState() {
@@ -44,17 +48,17 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
 
   @override
   void dispose() {
-    _updateTimer?.cancel();
+    _socketSubscription?.cancel();
+    _rideTrackingSocket?.sink.close();
     super.dispose();
   }
 
   Future<void> _initializeTracking() async {
     await _getUserLocation();
-    _fetchDriverLocation();
-    _updateTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (timer) => _fetchDriverLocation(),
-    );
+    await _getCurrentRideInfo(); // Get ride ID and initial driver info
+    if (_currentRideId != null) {
+      _connectRideTrackingSocket();
+    }
   }
 
   Future<void> _getUserLocation() async {
@@ -70,7 +74,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     }
   }
 
-  Future<void> _fetchDriverLocation() async {
+  // ============================================================
+  // 📡 Get current ride info (ID + initial driver data)
+  // ============================================================
+  Future<void> _getCurrentRideInfo() async {
     try {
       final response = await http.get(
         Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current/'),
@@ -85,11 +92,12 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
 
         if (data['has_active_ride'] == true &&
             data['driver_assigned'] == true) {
-          final driver = data['ride']['driver'];
-          final rideStatus = data['ride']['status'] ?? "N/A";
+          final ride = data['ride'];
+          final driver = ride['driver'];
 
           setState(() {
-            _status = rideStatus;
+            _currentRideId = ride['id']?.toString();
+            _status = ride['status'] ?? "N/A";
             _username = driver['username'] ?? "N/A";
             _phoneNumber = driver['phone_number'] ?? "N/A";
             _vehicleNumber = driver['vehicle_number'] ?? "N/A";
@@ -101,51 +109,124 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             }
           });
 
-          // Auto-navigate back if ride is completed or cancelled
-          if (rideStatus == 'completed' || rideStatus == 'cancelled') {
-            Future.delayed(const Duration(seconds: 3), () {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      rideStatus == 'completed'
-                          ? 'Ride completed! Returning to main page...'
-                          : 'Ride was cancelled. Returning to main page...',
-                    ),
-                    backgroundColor: rideStatus == 'completed'
-                        ? Colors.green
-                        : Colors.orange,
-                  ),
-                );
+          print('✅ Ride ID: $_currentRideId, Driver: $_username');
+        }
+      }
+    } catch (e) {
+      print('Error getting ride info: $e');
+    }
+  }
 
-                _updateTimer?.cancel();
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => UserMapScreen(
-                      userName: widget.userName,
-                      userEmail: widget.userEmail,
-                      userRole: widget.userRole,
-                      accessToken: widget.accessToken,
-                    ),
-                  ),
-                );
-              }
-            });
-          }
-        } else {
-          // No active ride or driver not assigned - go back to main page
+  // ============================================================
+  // 🔌 Connect to ride tracking WebSocket
+  // ============================================================
+  void _connectRideTrackingSocket() {
+    if (_currentRideId == null) {
+      print('❌ Cannot connect WebSocket: No ride ID');
+      return;
+    }
+
+    try {
+      final uri = Uri.parse(
+        'ws://127.0.0.1:8000/ws/ride/$_currentRideId/passenger/?sessionid=&csrftoken=',
+      );
+
+      _rideTrackingSocket = createPlatformWebSocket(uri);
+
+      _socketSubscription = _rideTrackingSocket!.stream.listen(
+        (message) {
+          if (!mounted) return;
+          _handleRideTrackingMessage(message);
+        },
+        onError: (error) {
+          print('⚠️ Ride tracking WebSocket error: $error');
+        },
+        onDone: () {
+          print('🔌 Ride tracking WebSocket closed');
+        },
+      );
+
+      print(
+        '✅ Connected to ride tracking WebSocket (ride ID: $_currentRideId)',
+      );
+    } catch (e) {
+      print('❌ Failed to connect ride tracking WebSocket: $e');
+    }
+  }
+
+  // ============================================================
+  // 📨 Handle WebSocket messages
+  // ============================================================
+  void _handleRideTrackingMessage(dynamic message) {
+    try {
+      final data = jsonDecode(message);
+      final eventType = data['type'];
+
+      print('📩 Ride tracking WS event: $eventType');
+
+      if (eventType == 'location_update') {
+        _handleLocationUpdate(data);
+      } else if (eventType == 'ride_status_update') {
+        _handleRideStatusUpdate(data);
+      } else if (eventType == 'connection_established') {
+        print('✅ Ride tracking WebSocket connected');
+      }
+    } catch (e) {
+      print('⚠️ Error parsing ride tracking message: $e');
+    }
+  }
+
+  // ============================================================
+  // 📍 Handle driver location updates
+  // ============================================================
+  void _handleLocationUpdate(Map<String, dynamic> data) {
+    if (data['user_type'] == 'driver') {
+      final lat = data['latitude'];
+      final lng = data['longitude'];
+
+      if (lat != null && lng != null) {
+        setState(() {
+          _driverPosition = LatLng(lat, lng);
+        });
+        print('📍 Driver location updated: $lat, $lng');
+      }
+    }
+  }
+
+  // ============================================================
+  // 🔄 Handle ride status updates
+  // ============================================================
+  void _handleRideStatusUpdate(Map<String, dynamic> data) {
+    final newStatus = data['status'];
+
+    if (newStatus != null) {
+      setState(() {
+        _status = newStatus;
+      });
+
+      // Handle terminal states
+      if (newStatus == 'completed' ||
+          newStatus == 'cancelled' ||
+          newStatus == 'no_drivers') {
+        Future.delayed(const Duration(seconds: 3), () {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
+              SnackBar(
                 content: Text(
-                  'No active ride found. Returning to main page...',
+                  newStatus == 'completed'
+                      ? 'Ride completed! Returning to main page...'
+                      : newStatus == 'no_drivers'
+                      ? 'No drivers available. Please try again later.'
+                      : 'Ride was cancelled. Returning to main page...',
                 ),
-                backgroundColor: Colors.orange,
+                backgroundColor: newStatus == 'completed'
+                    ? Colors.green
+                    : newStatus == 'no_drivers'
+                    ? Colors.red
+                    : Colors.orange,
               ),
             );
 
-            _updateTimer?.cancel();
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -158,12 +239,8 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
               ),
             );
           }
-        }
-      } else {
-        print("Error fetching driver location: ${response.statusCode}");
+        });
       }
-    } catch (e) {
-      print("Exception: $e");
     }
   }
 
@@ -251,8 +328,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             print('Navigating from tracking to user page');
             print('========================');
 
-            // Stop the update timer
-            _updateTimer?.cancel();
+            // Close WebSocket connections
+            _socketSubscription?.cancel();
+            _rideTrackingSocket?.sink.close();
 
             // Navigate back to UserMapScreen with proper parameters
             Navigator.pushReplacement(
@@ -308,9 +386,12 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                             decoration: BoxDecoration(
                               color: _status == 'completed'
                                   ? Colors.green
-                                  : _status == 'cancelled'
+                                  : _status == 'cancelled' ||
+                                        _status == 'no_drivers'
                                   ? Colors.red
-                                  : Colors.orange,
+                                  : _status == 'pending'
+                                  ? Colors.orange
+                                  : Colors.blue,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -398,77 +479,69 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                     },
                                   );
 
+                                  if (!context.mounted) return;
+
                                   if (shouldCancel != true) return;
 
                                   // Show loading indicator
-                                  if (mounted) {
-                                    showDialog(
-                                      context: context,
-                                      barrierDismissible: false,
-                                      builder: (BuildContext context) {
-                                        return const AlertDialog(
-                                          content: Row(
-                                            children: [
-                                              CircularProgressIndicator(),
-                                              SizedBox(width: 20),
-                                              Text('Cancelling ride...'),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    );
-                                  }
+                                  showDialog(
+                                    context: context,
+                                    barrierDismissible: false,
+                                    builder: (BuildContext context) {
+                                      return const AlertDialog(
+                                        content: Row(
+                                          children: [
+                                            CircularProgressIndicator(),
+                                            SizedBox(width: 20),
+                                            Text('Cancelling ride...'),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  );
 
                                   // Attempt to cancel the ride
                                   final success = await _cancelRide();
 
+                                  if (!context.mounted) return;
+
                                   // Close loading dialog
-                                  if (mounted) Navigator.pop(context);
+                                  Navigator.pop(context);
 
                                   if (success) {
-                                    // Show success message
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Ride cancelled successfully',
-                                          ),
-                                          backgroundColor: Colors.green,
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Ride cancelled successfully',
                                         ),
-                                      );
-                                    }
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
 
-                                    // Stop polling and navigate back to UserMapScreen
-                                    _updateTimer?.cancel();
-                                    if (mounted) {
-                                      Navigator.pushReplacement(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => UserMapScreen(
-                                            userName: widget.userName,
-                                            userEmail: widget.userEmail,
-                                            userRole: widget.userRole,
-                                            accessToken: widget.accessToken,
-                                          ),
+                                    // Close WebSocket and navigate back to UserMapScreen
+                                    _socketSubscription?.cancel();
+                                    _rideTrackingSocket?.sink.close();
+
+                                    Navigator.pushReplacement(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => UserMapScreen(
+                                          userName: widget.userName,
+                                          userEmail: widget.userEmail,
+                                          userRole: widget.userRole,
+                                          accessToken: widget.accessToken,
                                         ),
-                                      );
-                                    }
+                                      ),
+                                    );
                                   } else {
-                                    // Show error message
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Failed to cancel ride. Please try again.',
-                                          ),
-                                          backgroundColor: Colors.red,
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Failed to cancel ride. Please try again.',
                                         ),
-                                      );
-                                    }
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
                                   }
                                 },
                           icon: Icon(

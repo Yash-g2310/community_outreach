@@ -3,15 +3,17 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math' as math;
 import 'profile.dart';
 import 'previous_rides.dart';
+import 'utils/socket_channel_factory.dart';
 
 // If LoadingOverlayPage and UserTrackingPage are in other files,
 // make sure these imports match your project structure:
 import 'package:flutter_application_1/user_tracking_page.dart';
-import 'package:flutter_application_1/loading_page2.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -71,8 +73,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
   List<Map<String, dynamic>> _nearbyDrivers = [];
   Timer? _driversUpdateTimer;
 
-  // 👇 New timer for ride status checking (every 5s)
-  Timer? _rideStatusTimer;
+  // WebSocket for ride status updates
+  WebSocketChannel? _passengerSocket;
+  StreamSubscription? _socketSubscription;
+
+  // WebSocket for nearby drivers real-time updates
+  WebSocketChannel? _nearbyDriversSocket;
+  StreamSubscription? _nearbyDriversSubscription;
 
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -93,14 +100,20 @@ class _UserMapScreenState extends State<UserMapScreen> {
     super.initState();
     _loadCurrentLocation();
 
-    // Start the ride status checker loop
-    _startRideStatusChecker();
+    // Connect to passenger WebSocket for real-time ride status
+    if (widget.accessToken != null) {
+      _connectPassengerSocket();
+      _connectNearbyDriversSocket();
+    }
   }
 
   @override
   void dispose() {
     _driversUpdateTimer?.cancel();
-    _rideStatusTimer?.cancel(); // cancel the 5s checker
+    _socketSubscription?.cancel();
+    _passengerSocket?.sink.close();
+    _nearbyDriversSubscription?.cancel();
+    _nearbyDriversSocket?.sink.close();
     _pickupController.dispose();
     _dropController.dispose();
     _passengerController.dispose();
@@ -136,22 +149,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
       // Load nearby drivers after getting location
       _loadNearbyDrivers();
 
-      // Start automatic updates every 10 seconds
-      _startDriversAutoUpdate();
+      // Real-time updates via WebSocket (no more polling!)
     } catch (e) {
       debugPrint('Error getting location: $e');
     }
   }
 
-  // Start automatic updates of nearby drivers every 10 seconds
-  void _startDriversAutoUpdate() {
-    _driversUpdateTimer?.cancel(); // Cancel any existing timer
-    _driversUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      if (_currentPosition != null && widget.accessToken != null && mounted) {
-        _loadNearbyDrivers();
-      }
-    });
-  } // Fetch nearby drivers from API
+  // Fetch nearby drivers from API (initial load only)
 
   Future<void> _loadNearbyDrivers() async {
     if (_currentPosition == null || widget.accessToken == null || !mounted) {
@@ -218,90 +222,260 @@ class _UserMapScreenState extends State<UserMapScreen> {
   }
 
   // ============================================================
-  // 🧭 NEW: Start ride status checker (every 5s)
+  // 🔌 Connect to passenger WebSocket for ride status updates
   // ============================================================
-  void _startRideStatusChecker() {
-    _rideStatusTimer?.cancel();
-    _rideStatusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (widget.accessToken != null && mounted) {
-        _checkRideStatus();
+  void _connectPassengerSocket() {
+    try {
+      final uri = Uri.parse(
+        'ws://127.0.0.1:8000/ws/passenger/ride-status/?sessionid=&csrftoken=',
+      );
+
+      _passengerSocket = createPlatformWebSocket(uri);
+
+      _socketSubscription = _passengerSocket!.stream.listen(
+        (message) {
+          if (!mounted) return;
+          _handlePassengerSocketMessage(message);
+        },
+        onError: (error) {
+          print('⚠️ Passenger WebSocket error: $error');
+        },
+        onDone: () {
+          print('🔌 Passenger WebSocket connection closed');
+        },
+      );
+
+      print('✅ Passenger WebSocket connected (user_page)');
+    } catch (e) {
+      print('❌ Failed to connect passenger WebSocket: $e');
+    }
+  }
+
+  // ============================================================
+  // 📨 Handle incoming WebSocket messages
+  // ============================================================
+  void _handlePassengerSocketMessage(dynamic message) {
+    try {
+      final data = jsonDecode(message);
+      final eventType = data['type'];
+
+      print('📩 Passenger WS event (user_page): $eventType');
+
+      if (eventType == 'ride_accepted') {
+        // Driver accepted the ride - navigate to tracking page
+        _handleRideAccepted(data);
+      } else if (eventType == 'connection_established') {
+        print('✅ WebSocket connection confirmed');
+      }
+    } catch (e) {
+      print('⚠️ Error parsing passenger WebSocket message: $e');
+    }
+  }
+
+  // ============================================================
+  // ✅ Handle ride accepted by driver
+  // ============================================================
+  void _handleRideAccepted(Map<String, dynamic> data) {
+    print('✅ Driver accepted ride — navigating to tracking page');
+
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => UserTrackingPage(
+            accessToken: widget.accessToken!,
+            userName: widget.userName,
+            userEmail: widget.userEmail,
+            userRole: widget.userRole,
+          ),
+        ),
+      );
+    }
+  }
+
+  // ============================================================
+  // 🔌 Connect to nearby drivers WebSocket for real-time updates
+  // ============================================================
+  void _connectNearbyDriversSocket() {
+    try {
+      final uri = Uri.parse(
+        'ws://127.0.0.1:8000/ws/passenger/nearby-drivers/?sessionid=&csrftoken=',
+      );
+
+      _nearbyDriversSocket = createPlatformWebSocket(uri);
+
+      _nearbyDriversSubscription = _nearbyDriversSocket!.stream.listen(
+        (message) {
+          if (!mounted) return;
+          _handleNearbyDriversMessage(message);
+        },
+        onError: (error) {
+          print('⚠️ Nearby drivers WebSocket error: $error');
+        },
+        onDone: () {
+          print('🔌 Nearby drivers WebSocket connection closed');
+        },
+      );
+
+      print('✅ Nearby drivers WebSocket connected');
+    } catch (e) {
+      print('❌ Failed to connect nearby drivers WebSocket: $e');
+    }
+  }
+
+  // ============================================================
+  // 📨 Handle nearby drivers WebSocket messages
+  // ============================================================
+  void _handleNearbyDriversMessage(dynamic message) {
+    try {
+      final data = jsonDecode(message);
+      final eventType = data['type'];
+
+      print('📩 Nearby drivers WS event: $eventType');
+
+      if (eventType == 'driver_status_changed') {
+        _handleDriverStatusChanged(data);
+      } else if (eventType == 'driver_location_updated') {
+        _handleDriverLocationUpdated(data);
+      } else if (eventType == 'connection_established') {
+        print('✅ Nearby drivers WebSocket connection confirmed');
+      }
+    } catch (e) {
+      print('⚠️ Error parsing nearby drivers WebSocket message: $e');
+    }
+  }
+
+  // ============================================================
+  // Handle driver going online/offline
+  // ============================================================
+  void _handleDriverStatusChanged(Map<String, dynamic> data) {
+    final driverId = data['driver_id'];
+    final status = data['status'];
+    final latitude = data['latitude'];
+    final longitude = data['longitude'];
+
+    print('🚗 Driver $driverId status changed to: $status');
+
+    if (!mounted) return;
+
+    setState(() {
+      if (status == 'available' && latitude != null && longitude != null) {
+        // Driver went online - check if they're nearby
+        if (_currentPosition != null) {
+          // Calculate distance
+          final distance = _calculateDistance(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            latitude,
+            longitude,
+          );
+
+          if (distance <= 5000) {
+            // Within 5km - add to list if not already there
+            final existingIndex = _nearbyDrivers.indexWhere(
+              (d) => d['driver_id'] == driverId,
+            );
+
+            if (existingIndex == -1) {
+              // Add new driver
+              _nearbyDrivers.add({
+                'driver_id': driverId,
+                'latitude': latitude,
+                'longitude': longitude,
+                'distance_meters': distance,
+              });
+              print('➕ Added driver $driverId to nearby list');
+            }
+          }
+        }
+      } else {
+        // Driver went offline or unavailable - remove from list
+        _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
+        print('➖ Removed driver $driverId from nearby list');
       }
     });
   }
 
   // ============================================================
-  // 🧭 Check ride status + log fetched passenger/current data
+  // Handle driver location update
   // ============================================================
-  Future<void> _checkRideStatus() async {
-    try {
-      final response = await http.get(
-        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
-        headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
-          'Content-Type': 'application/json',
-        },
+  void _handleDriverLocationUpdated(Map<String, dynamic> data) {
+    final driverId = data['driver_id'];
+    final latitude = data['latitude'];
+    final longitude = data['longitude'];
+
+    if (!mounted || _currentPosition == null) return;
+
+    // Calculate new distance
+    final distance = _calculateDistance(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      latitude,
+      longitude,
+    );
+
+    setState(() {
+      final existingIndex = _nearbyDrivers.indexWhere(
+        (d) => d['driver_id'] == driverId,
       );
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-
-        // 🪵 Log full data clearly
-        print('\n==============================');
-        print('Fetched /passenger/current data:');
-        print(jsonEncode(data));
-        print('==============================');
-
-        final bool hasActiveRide = data['has_active_ride'] ?? false;
-        final bool driverAssigned = data['driver_assigned'] ?? false;
-
-        // 🪵 Log flags for clarity
-        print('has_active_ride: $hasActiveRide');
-        print('driver_assigned: $driverAssigned');
-
-        if (!hasActiveRide) {
-          print('➡️ No active ride — staying on current page.');
-          return;
-        } else if (hasActiveRide && !driverAssigned) {
-          print('➡️ Active ride, but no driver yet — showing LoadingOverlay.');
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => RideLoadingScreen(
-                  accessToken: widget.accessToken!,
-                  userName: widget.userName,
-                  userEmail: widget.userEmail,
-                  userRole: widget.userRole,
-                ),
-              ),
-            );
-          }
-        } else if (hasActiveRide && driverAssigned) {
-          print('✅ Driver assigned — navigating to UserTrackingPage.');
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => UserTrackingPage(
-                  accessToken: widget.accessToken!,
-                  userName: widget.userName,
-                  userEmail: widget.userEmail,
-                  userRole: widget.userRole,
-                ),
-              ),
-            );
-          }
+      if (distance <= 5000) {
+        // Still within range
+        if (existingIndex != -1) {
+          // Update existing driver
+          _nearbyDrivers[existingIndex]['latitude'] = latitude;
+          _nearbyDrivers[existingIndex]['longitude'] = longitude;
+          _nearbyDrivers[existingIndex]['distance_meters'] = distance;
+        } else {
+          // Add new driver
+          _nearbyDrivers.add({
+            'driver_id': driverId,
+            'latitude': latitude,
+            'longitude': longitude,
+            'distance_meters': distance,
+          });
         }
       } else {
-        print('❌ Failed to fetch ride status: ${response.statusCode}');
-        print('Response body: ${response.body}');
+        // Moved out of range - remove
+        if (existingIndex != -1) {
+          _nearbyDrivers.removeAt(existingIndex);
+          print('🚗 Driver $driverId moved out of range');
+        }
       }
-    } catch (e) {
-      print('⚠️ Error checking ride status: $e');
-    }
+    });
   }
-  // ============================================================
 
+  // ============================================================
+  // Calculate distance between two coordinates (in meters)
+  // ============================================================
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double earthRadius = 6371000; // meters
+
+    final double dLat = _degreesToRadians(lat2 - lat1);
+    final double dLon = _degreesToRadians(lon2 - lon1);
+
+    final double a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_degreesToRadians(lat1)) *
+            math.cos(_degreesToRadians(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * math.pi / 180;
+  }
+
+  // ============================================================
   // Create ride request API call
   Future<void> _createRideRequest() async {
     // Validation

@@ -63,7 +63,7 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _profilePicture;
   String _displayRole = 'User';
   String? _vehicleNumber; // Only for drivers
-  
+
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -210,7 +210,9 @@ class _ProfilePageState extends State<ProfilePage> {
       print(
         'Raw phone_number: ${userData['phone_number']} (${userData['phone_number'].runtimeType})',
       );
-      print('Raw profile_picture_url: ${userData['profile_picture_url']}'); // Updated debug statement
+      print(
+        'Raw profile_picture_url: ${userData['profile_picture_url']}',
+      ); // Updated debug statement
       print('Raw role: ${userData['role']}');
 
       // Extract user information from nested object
@@ -234,7 +236,8 @@ class _ProfilePageState extends State<ProfilePage> {
         print('  → Setting to "$_displayPhone"');
       }
 
-      _profilePicture = userData['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+      _profilePicture =
+          userData['profile_picture_url']; // Use profile_picture_url instead of profile_picture
       _displayRole = (userData['role']?.toString() ?? 'driver').capitalize();
 
       // Extract driver-specific information
@@ -274,7 +277,8 @@ class _ProfilePageState extends State<ProfilePage> {
           print('  → Setting to "$_displayPhone"');
         }
 
-        _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+        _profilePicture =
+            data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
         _displayRole = (data['role']?.toString() ?? 'driver').capitalize();
         _vehicleNumber = data['vehicle_number']?.toString();
 
@@ -307,7 +311,9 @@ class _ProfilePageState extends State<ProfilePage> {
     print(
       'Raw phone_number: ${data['phone_number']} (${data['phone_number'].runtimeType})',
     );
-    print('Raw profile_picture_url: ${data['profile_picture_url']}'); // Updated debug statement
+    print(
+      'Raw profile_picture_url: ${data['profile_picture_url']}',
+    ); // Updated debug statement
     print('Raw role: ${data['role']}');
 
     // User profile has flat structure
@@ -331,7 +337,8 @@ class _ProfilePageState extends State<ProfilePage> {
       print('  → Setting to "$_displayPhone"');
     }
 
-    _profilePicture = data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
+    _profilePicture =
+        data['profile_picture_url']; // Use profile_picture_url instead of profile_picture
     _displayRole = (data['role']?.toString() ?? 'user').capitalize();
 
     // Users don't have driver-specific fields
@@ -395,10 +402,10 @@ class _ProfilePageState extends State<ProfilePage> {
 
       // Prepare multipart request
       String apiEndpoint = 'http://localhost:8000/api/rides/user/profile/';
-      
+
       var request = http.MultipartRequest('PATCH', Uri.parse(apiEndpoint));
       request.headers['Authorization'] = 'Bearer ${widget.accessToken}';
-      
+
       // Add image file
       request.files.add(
         http.MultipartFile.fromBytes(
@@ -530,45 +537,53 @@ class _ProfilePageState extends State<ProfilePage> {
                           children: [
                             CircleAvatar(
                               radius: 45,
-                              backgroundColor: Colors.white.withOpacity(0.3),
+                              backgroundColor: Colors.white.withValues(
+                                alpha: 0.3,
+                              ),
                               child: _isUploading
                                   ? const CircularProgressIndicator(
                                       color: Colors.white,
                                     )
                                   : _profilePicture != null
-                                      ? ClipOval(
-                                          child: Image.network(
-                                            _profilePicture!,
-                                            width: 90,
-                                            height: 90,
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (context, error, stackTrace) {
+                                  ? ClipOval(
+                                      child: Image.network(
+                                        _profilePicture!,
+                                        width: 90,
+                                        height: 90,
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) {
                                               return const Icon(
                                                 Icons.person,
                                                 size: 50,
                                                 color: Colors.white,
                                               );
                                             },
-                                          ),
-                                        )
-                                      : const Icon(
-                                          Icons.person,
-                                          size: 50,
-                                          color: Colors.white,
-                                        ),
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.person,
+                                      size: 50,
+                                      color: Colors.white,
+                                    ),
                             ),
                             // Edit button
                             Positioned(
                               bottom: 0,
                               right: 0,
                               child: GestureDetector(
-                                onTap: _isUploading ? null : _uploadProfilePicture,
+                                onTap: _isUploading
+                                    ? null
+                                    : _uploadProfilePicture,
                                 child: Container(
                                   padding: const EdgeInsets.all(6),
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     shape: BoxShape.circle,
-                                    border: Border.all(color: Colors.cyan, width: 2),
+                                    border: Border.all(
+                                      color: Colors.cyan,
+                                      width: 2,
+                                    ),
                                   ),
                                   child: const Icon(
                                     Icons.camera_alt,
@@ -617,7 +632,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             borderRadius: BorderRadius.circular(18),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.08),
+                                color: Colors.black.withValues(alpha: 0.08),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               ),
@@ -671,7 +686,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             borderRadius: BorderRadius.circular(18),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.08),
+                                color: Colors.black.withValues(alpha: 0.08),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               ),
@@ -725,7 +740,7 @@ class _ProfilePageState extends State<ProfilePage> {
                               borderRadius: BorderRadius.circular(18),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.08),
+                                  color: Colors.black.withValues(alpha: 0.08),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
                                 ),

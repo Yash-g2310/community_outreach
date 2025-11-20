@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     
     # Third-party apps
+    'channels',
     'rest_framework',
     'corsheaders',
     
@@ -75,6 +76,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'app_backend.wsgi.application'
+ASGI_APPLICATION = 'app_backend.asgi.application'
 
 
 # Database
@@ -173,4 +175,14 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': False,
     'UPDATE_LAST_LOGIN': True,
 }
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    }
+}
+
+RIDE_OFFER_TIMEOUT_SECONDS = 10
+RIDE_OFFER_MONITOR_INTERVAL = 5
+ENABLE_OFFER_TIMEOUT_MONITOR = True
 

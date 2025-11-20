@@ -108,6 +108,8 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         },
       );
 
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
         setState(() {
           _rideStatus = 'completed';
@@ -131,111 +133,124 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         throw Exception('Failed to complete ride: ${response.statusCode}');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error completing ride: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error completing ride: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _cancelRide() async {
-  if (widget.accessToken == null) return;
+    if (widget.accessToken == null) return;
 
-  // Ask user for confirmation
-  final shouldCancel = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Cancel Ride'),
-      content: const Text('Are you sure you want to cancel this ride?'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('No'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Yes', style: TextStyle(color: Colors.red)),
-        ),
-      ],
-    ),
-  );
-
-  // If the user chooses "No", stay on the same page
-  if (shouldCancel != true) {
-    debugPrint('❌ Ride cancellation aborted by user.');
-    return;
-  }
-
-  setState(() {
-    _isLoading = true;
-  });
-
-  try {
-    // ✅ Correct endpoint (adjusted to match your Django URLs)
-    final endpoint = widget.isDriver
-        ? '/api/rides/handle/${widget.rideId}/driver-cancel/'
-        : '/api/rides/handle/${widget.rideId}/passenger-cancel/';
-
-    debugPrint('🛰️ Sending cancel request to: $baseUrl$endpoint');
-
-    final response = await http.post(
-      Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Authorization': 'Bearer ${widget.accessToken}',
-        'Content-Type': 'application/json',
-      },
-    );
-
-    // 🧾 Print the raw response for debugging
-    debugPrint('🔍 Cancel Ride Response Code: ${response.statusCode}');
-    debugPrint('🔍 Cancel Ride Response Body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      debugPrint('✅ Ride cancelled successfully.');
-
-      setState(() {
-        _rideStatus = 'cancelled';
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Ride cancelled successfully'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-
-      // ⏳ Navigate back to notifications after short delay
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          debugPrint('🟠 Ride cancelled — returning to previous page...');
-          Navigator.pop(context); // ✅ Just go back one page
-        }
-      });
-    } else {
-      // ❌ Non-success status code — log details
-      throw Exception(
-          'Failed to cancel ride: ${response.statusCode} | ${response.body}');
-    }
-  } catch (e) {
-    debugPrint('💥 Error cancelling ride: $e');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error cancelling ride: $e'),
-        backgroundColor: Colors.red,
+    // Ask user for confirmation
+    final shouldCancel = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel Ride'),
+        content: const Text('Are you sure you want to cancel this ride?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Yes', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
-  } finally {
+
+    if (!mounted) return;
+
+    // If the user chooses "No", stay on the same page
+    if (shouldCancel != true) {
+      debugPrint('❌ Ride cancellation aborted by user.');
+      return;
+    }
+
     setState(() {
-      _isLoading = false;
+      _isLoading = true;
     });
+
+    try {
+      // ✅ Correct endpoint (adjusted to match your Django URLs)
+      final endpoint = widget.isDriver
+          ? '/api/rides/handle/${widget.rideId}/driver-cancel/'
+          : '/api/rides/handle/${widget.rideId}/passenger-cancel/';
+
+      debugPrint('🛰️ Sending cancel request to: $baseUrl$endpoint');
+
+      final response = await http.post(
+        Uri.parse('$baseUrl$endpoint'),
+        headers: {
+          'Authorization': 'Bearer ${widget.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      // 🧾 Print the raw response for debugging
+      debugPrint('🔍 Cancel Ride Response Code: ${response.statusCode}');
+      debugPrint('🔍 Cancel Ride Response Body: ${response.body}');
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        debugPrint('✅ Ride cancelled successfully.');
+
+        setState(() {
+          _rideStatus = 'cancelled';
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ride cancelled successfully'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+
+        // ⏳ Navigate back to notifications after short delay
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) {
+            debugPrint('🟠 Ride cancelled — returning to previous page...');
+            Navigator.pop(context); // ✅ Just go back one page
+          }
+        });
+      } else {
+        // ❌ Non-success status code — log details
+        throw Exception(
+          'Failed to cancel ride: ${response.statusCode} | ${response.body}',
+        );
+      }
+    } catch (e) {
+      debugPrint('💥 Error cancelling ride: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error cancelling ride: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
-}
 
   @override
   Widget build(BuildContext context) {

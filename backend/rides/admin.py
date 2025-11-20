@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, DriverProfile, RideRequest
+from .models import User, DriverProfile, RideRequest, RideOffer
 
 
 @admin.register(User)
@@ -35,4 +35,10 @@ class RideRequestAdmin(admin.ModelAdmin):
     readonly_fields = ['requested_at', 'accepted_at', 'completed_at', 'cancelled_at']
     date_hierarchy = 'requested_at'
 
+
+@admin.register(RideOffer)
+class RideOfferAdmin(admin.ModelAdmin):
+    list_display = ("ride", "driver", "order", "status", "sent_at", "responded_at")
+    list_filter = ("status",)
+    search_fields = ("ride__id", "driver__username")
 

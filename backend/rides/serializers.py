@@ -81,8 +81,8 @@ class RideRequestSerializer(serializers.ModelSerializer):
 
 class RideRequestCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating ride requests"""
-    # Make broadcast_radius optional with default 500m
-    broadcast_radius = serializers.IntegerField(default=500, required=False)
+    # Make broadcast_radius optional with default 1000m
+    broadcast_radius = serializers.IntegerField(default=1000, required=False)
     
     class Meta:
         model = RideRequest

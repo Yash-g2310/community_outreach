@@ -35,7 +35,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
           // 🔹 blurred background
           BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(color: Colors.black.withOpacity(0.3)),
+            child: Container(color: Colors.black.withValues(alpha: 0.3)),
           ),
 
           // 🔹 loading card
@@ -45,9 +45,9 @@ class _LoadingOverlayState extends State<LoadingOverlay>
               margin: const EdgeInsets.only(bottom: 80),
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
+                color: Colors.white.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.3)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

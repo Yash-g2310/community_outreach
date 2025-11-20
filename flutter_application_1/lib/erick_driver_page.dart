@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -6,9 +7,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web_socket_channel/status.dart' as ws_status;
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'profile.dart';
 import 'ride_tracking_page.dart';
 import 'previous_rides.dart';
+import 'utils/socket_channel_factory.dart';
 
 void main() {
   runApp(const ERickDriverApp());
@@ -32,8 +36,18 @@ class ERickDriverApp extends StatelessWidget {
 class DriverPage extends StatefulWidget {
   final String? jwtToken;
   final Map<String, dynamic>? userData;
+  final String? sessionId;
+  final String? csrfToken;
+  final String? refreshToken;
 
-  const DriverPage({super.key, this.jwtToken, this.userData});
+  const DriverPage({
+    super.key,
+    this.jwtToken,
+    this.userData,
+    this.sessionId,
+    this.csrfToken,
+    this.refreshToken,
+  });
 
   @override
   State<DriverPage> createState() => _DriverPageState();
@@ -53,6 +67,17 @@ class _DriverPageState extends State<DriverPage> {
 
   List<Map<String, dynamic>> notifications = [];
   Set<int> _rejectedRideIds = {}; // Local storage for rejected ride IDs
+  WebSocketChannel? _driverSocket;
+  StreamSubscription? _driverSocketSubscription;
+  Timer? _socketReconnectTimer;
+  bool _shouldMaintainSocket = true;
+  bool _isSocketConnected = false;
+  String? _socketStatusMessage;
+  int _socketReconnectAttempts = 0;
+  int _socketFailureCount = 0;
+  DateTime? _lastSocketMessageAt;
+  DateTime? _lastRideReceivedAt;
+  String? _lastSocketError;
 
   @override
   void initState() {
@@ -60,10 +85,14 @@ class _DriverPageState extends State<DriverPage> {
     _loadRejectedRides(); // Load rejected rides from local storage
     _loadDriverData();
     _initializeLocation();
+    _initializeDriverSocket();
   }
 
   @override
   void dispose() {
+    _shouldMaintainSocket = false;
+    _socketReconnectTimer?.cancel();
+    _cancelDriverSocket();
     _locationUpdateTimer?.cancel();
     super.dispose();
   }
@@ -129,6 +158,303 @@ class _DriverPageState extends State<DriverPage> {
     _locationUpdateTimer?.cancel();
     _locationUpdateTimer = null;
     print('Location update timer stopped');
+  }
+
+  void _logDriver(String message, {String tag = 'Driver'}) {
+    if (!kDebugMode) return;
+    debugPrint('[$tag] $message');
+  }
+
+  void _logSocket(String message) => _logDriver(message, tag: 'DriverSocket');
+
+  String _formatTimestamp(DateTime? timestamp) {
+    if (timestamp == null) return 'never';
+    final local = timestamp.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    final ss = local.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
+  bool get _canUseDriverSocket => (widget.sessionId?.isNotEmpty ?? false);
+
+  String get _driverSocketUrl {
+    final sanitizedBase = baseUrl.replaceFirst(RegExp(r'^https?://'), '');
+    final scheme = baseUrl.startsWith('https') ? 'wss://' : 'ws://';
+    final uri = Uri.parse('$scheme$sanitizedBase/ws/driver/rides/');
+    final queryParams = <String, String>{};
+    if (widget.sessionId?.isNotEmpty ?? false) {
+      queryParams['sessionid'] = widget.sessionId!;
+    }
+    if (widget.csrfToken?.isNotEmpty ?? false) {
+      queryParams['csrftoken'] = widget.csrfToken!;
+    }
+
+    if (queryParams.isEmpty) {
+      return uri.toString();
+    }
+
+    return uri.replace(queryParameters: queryParams).toString();
+  }
+
+  String _buildCookieHeader() {
+    final cookies = <String>[];
+    if (widget.sessionId != null && widget.sessionId!.isNotEmpty) {
+      cookies.add('sessionid=${widget.sessionId}');
+    }
+    if (widget.csrfToken != null && widget.csrfToken!.isNotEmpty) {
+      cookies.add('csrftoken=${widget.csrfToken}');
+    }
+    return cookies.join('; ');
+  }
+
+  void _initializeDriverSocket() {
+    if (!_canUseDriverSocket) {
+      _socketStatusMessage =
+          'Realtime updates unavailable (missing session cookie)';
+      _logSocket('Skipping WS init - missing session cookie');
+      return;
+    }
+
+    _socketStatusMessage = 'Connecting to live ride updates...';
+    _logSocket('Initializing driver WebSocket connection');
+    _connectDriverSocket();
+  }
+
+  void _connectDriverSocket({bool isReconnect = false}) {
+    if (!_canUseDriverSocket || !_shouldMaintainSocket) {
+      _logSocket(
+        'WS connect aborted - allowed=$_canUseDriverSocket maintain=$_shouldMaintainSocket',
+      );
+      return;
+    }
+
+    _socketReconnectTimer?.cancel();
+
+    final cookieHeader = _buildCookieHeader();
+    final headers = <String, dynamic>{};
+    if (cookieHeader.isNotEmpty) {
+      headers['Cookie'] = cookieHeader;
+    }
+
+    _logSocket('Connecting to $_driverSocketUrl (retry=$isReconnect)');
+
+    try {
+      final channel = createPlatformWebSocket(
+        Uri.parse(_driverSocketUrl),
+        headers: headers.isEmpty ? null : headers,
+      );
+
+      _driverSocketSubscription?.cancel();
+      _driverSocketSubscription = channel.stream.listen(
+        _handleSocketMessage,
+        onError: _handleSocketError,
+        onDone: () => _handleSocketClosed(null, null),
+        cancelOnError: false,
+      );
+
+      _driverSocket = channel;
+
+      _safeSetState(() {
+        _isSocketConnected = true;
+        _socketStatusMessage = isReconnect
+            ? 'Reconnected to live ride updates'
+            : 'Connected to live ride updates';
+        _socketReconnectAttempts = 0;
+        _lastSocketError = null;
+      });
+      _socketFailureCount = 0;
+      _lastSocketMessageAt = DateTime.now();
+      _logSocket('WebSocket connection opened (reconnect=$isReconnect)');
+    } catch (error) {
+      _handleSocketError(error);
+    }
+  }
+
+  void _handleSocketMessage(dynamic message) {
+    try {
+      final rawPayload = message is String ? message : message.toString();
+      final data = json.decode(rawPayload) as Map<String, dynamic>;
+      final eventType = data['type'] as String?;
+      _lastSocketMessageAt = DateTime.now();
+      _socketStatusMessage = 'Listening for ride updates';
+      _lastSocketError = null;
+      _logSocket('Message <- ${eventType ?? 'unknown'}');
+
+      if (eventType == null) {
+        return;
+      }
+
+      switch (eventType) {
+        case 'connection_established':
+          _safeSetState(() {
+            _socketStatusMessage = data['message'] ?? 'Connected';
+          });
+          break;
+        case 'new_ride_request':
+          final rideData = data['ride'];
+          if (rideData is Map) {
+            _handleIncomingRide(Map<String, dynamic>.from(rideData));
+          } else {
+            _logSocket('Malformed ride payload: ${rideData.runtimeType}');
+          }
+          break;
+        case 'ride_cancelled':
+        case 'ride_accepted':
+        case 'ride_expired':
+          _handleRideRemoval(
+            data['ride_id'],
+            data['message'] ??
+                (eventType == 'ride_cancelled'
+                    ? 'Ride cancelled by passenger'
+                    : eventType == 'ride_expired'
+                    ? 'Ride offer timed out'
+                    : 'Ride accepted by another driver'),
+          );
+          break;
+        case 'pong':
+          break;
+        default:
+          print('Unhandled WS event: $data');
+      }
+    } catch (e) {
+      print('Error decoding driver WS message: $e | raw=$message');
+    }
+  }
+
+  void _handleIncomingRide(Map<String, dynamic> ridePayload) {
+    final rideId = ridePayload['id'];
+    if (rideId == null) {
+      _logSocket('Incoming ride missing ID: $ridePayload');
+      return;
+    }
+
+    if (_rejectedRideIds.contains(rideId)) {
+      _logSocket('Ignoring ride $rideId - previously rejected');
+      return;
+    }
+
+    final mappedRide = _rideToNotification(ridePayload);
+    _lastRideReceivedAt = DateTime.now();
+    _logSocket(
+      'Ride $rideId pushed to notifications (total=${notifications.length + 1})',
+    );
+
+    _safeSetState(() {
+      final updated = List<Map<String, dynamic>>.from(notifications);
+      final existingIndex = updated.indexWhere(
+        (notif) => notif['id'] == rideId,
+      );
+      if (existingIndex >= 0) {
+        updated[existingIndex] = mappedRide;
+      } else {
+        updated.insert(0, mappedRide);
+      }
+      notifications = updated;
+    });
+
+    _showSnackBar(
+      'New ride request received! 🚗',
+      backgroundColor: Colors.green,
+    );
+  }
+
+  void _handleRideRemoval(dynamic rideIdRaw, String reason) {
+    final rideId = rideIdRaw is int ? rideIdRaw : int.tryParse('$rideIdRaw');
+    if (rideId == null) {
+      _logSocket('Ride removal skipped - invalid id: $rideIdRaw');
+      return;
+    }
+
+    var removed = false;
+    _safeSetState(() {
+      final updated = notifications
+          .where((notif) => notif['id'] != rideId)
+          .toList();
+      removed = updated.length != notifications.length;
+      notifications = updated;
+    });
+
+    if (removed) {
+      _showSnackBar(reason, backgroundColor: Colors.orange);
+      _logSocket('Ride $rideId removed: $reason');
+    }
+  }
+
+  void _handleSocketError(dynamic error) {
+    _logSocket('Error: $error');
+    _driverSocketSubscription?.cancel();
+    _driverSocketSubscription = null;
+    _driverSocket = null;
+    _socketFailureCount += 1;
+    _lastSocketError = '$error';
+
+    _safeSetState(() {
+      _isSocketConnected = false;
+      _socketStatusMessage =
+          'Realtime connection lost - retrying (fail=$_socketFailureCount)';
+    });
+
+    _scheduleSocketReconnect();
+  }
+
+  void _handleSocketClosed(int? code, String? reason) {
+    _logSocket('Closed code=$code reason=$reason');
+    _driverSocketSubscription?.cancel();
+    _driverSocketSubscription = null;
+    _driverSocket = null;
+
+    _safeSetState(() {
+      _isSocketConnected = false;
+      _socketStatusMessage = 'Realtime connection closed';
+    });
+
+    _scheduleSocketReconnect();
+  }
+
+  void _scheduleSocketReconnect() {
+    if (!_shouldMaintainSocket || !_canUseDriverSocket) {
+      _logSocket(
+        'Reconnect suppressed - shouldMaintain=$_shouldMaintainSocket canUse=$_canUseDriverSocket',
+      );
+      return;
+    }
+
+    _socketReconnectTimer?.cancel();
+    _socketReconnectAttempts += 1;
+    _logSocket('Scheduling reconnect attempt #$_socketReconnectAttempts');
+    _socketReconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (!_shouldMaintainSocket) return;
+      _connectDriverSocket(isReconnect: true);
+    });
+  }
+
+  void _manualSocketReconnect() {
+    if (!_canUseDriverSocket) return;
+    _socketReconnectTimer?.cancel();
+    _cancelDriverSocket();
+    _logSocket('Manual reconnect triggered by driver');
+    _connectDriverSocket(isReconnect: true);
+  }
+
+  void _cancelDriverSocket() {
+    _driverSocketSubscription?.cancel();
+    _driverSocketSubscription = null;
+    _driverSocket?.sink.close(ws_status.normalClosure);
+    _driverSocket = null;
+    _logSocket('Socket resources disposed');
+  }
+
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
+
+  void _showSnackBar(String message, {Color backgroundColor = Colors.black87}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: backgroundColor),
+    );
   }
 
   Future<void> _updateDriverLocation() async {
@@ -221,11 +547,11 @@ class _DriverPageState extends State<DriverPage> {
         _startLocationUpdates();
       }
     } catch (e) {
-      setState(() {
+      _safeSetState(() {
         errorMessage = 'Error loading driver data: $e';
       });
     } finally {
-      setState(() {
+      _safeSetState(() {
         isLoading = false;
       });
     }
@@ -281,19 +607,6 @@ class _DriverPageState extends State<DriverPage> {
     print(
       'Added ride $rideId to rejected list. Total rejected: ${_rejectedRideIds.length}',
     );
-  }
-
-  // Clear old rejected rides (optional cleanup - can be called periodically)
-  Future<void> _cleanupOldRejectedRides() async {
-    // Clear all rejected rides (useful for testing or periodic cleanup)
-    setState(() {
-      _rejectedRideIds.clear();
-    });
-    await _saveRejectedRides();
-    print('Cleared all rejected rides');
-
-    // Refresh the rides list to show previously rejected rides
-    await _fetchNearbyRides();
   }
 
   Future<void> _fetchDriverProfile() async {
@@ -431,20 +744,8 @@ class _DriverPageState extends State<DriverPage> {
               return !isRejected;
             })
             .map<Map<String, dynamic>>((ride) {
-              return {
-                'id': ride['id'],
-                'start': ride['pickup_address'] ?? 'Unknown pickup',
-                'end': ride['dropoff_address'] ?? 'Unknown destination',
-                'people': ride['number_of_passengers'] ?? 1,
-                'distance': ride['distance_from_driver'] ?? 0,
-                'passenger_name': ride['passenger']?['username'] ?? 'Unknown',
-                'passenger_phone': ride['passenger']?['phone_number'] ?? '',
-                'pickup_lat': ride['pickup_latitude'],
-                'pickup_lng': ride['pickup_longitude'],
-                'dropoff_lat': ride['dropoff_latitude'],
-                'dropoff_lng': ride['dropoff_longitude'],
-                'requested_at': ride['requested_at'],
-              };
+              final rideMap = Map<String, dynamic>.from(ride as Map);
+              return _rideToNotification(rideMap);
             })
             .toList();
 
@@ -474,6 +775,35 @@ class _DriverPageState extends State<DriverPage> {
         notifications = [];
       });
     }
+  }
+
+  Map<String, dynamic> _rideToNotification(Map<String, dynamic> ride) {
+    final passengerData = ride['passenger'];
+    String passengerName = 'Unknown';
+    String passengerPhone = '';
+
+    if (passengerData is Map) {
+      passengerName = passengerData['username']?.toString() ?? 'Unknown';
+      passengerPhone = passengerData['phone_number']?.toString() ?? '';
+    } else {
+      passengerName = ride['passenger_name']?.toString() ?? 'Unknown';
+      passengerPhone = ride['passenger_phone']?.toString() ?? '';
+    }
+
+    return {
+      'id': ride['id'],
+      'start': ride['pickup_address'] ?? 'Unknown pickup',
+      'end': ride['dropoff_address'] ?? 'Unknown destination',
+      'people': ride['number_of_passengers'] ?? ride['passengers'] ?? 1,
+      'distance': ride['distance_from_driver'] ?? ride['distance'] ?? 0,
+      'passenger_name': passengerName,
+      'passenger_phone': passengerPhone,
+      'pickup_lat': ride['pickup_latitude'] ?? ride['pickup_lat'],
+      'pickup_lng': ride['pickup_longitude'] ?? ride['pickup_lng'],
+      'dropoff_lat': ride['dropoff_latitude'] ?? ride['dropoff_lat'],
+      'dropoff_lng': ride['dropoff_longitude'] ?? ride['dropoff_lng'],
+      'requested_at': ride['requested_at'],
+    };
   }
 
   Future<void> _updateDriverStatus(bool active) async {
@@ -508,8 +838,10 @@ class _DriverPageState extends State<DriverPage> {
         }),
       );
 
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
-        setState(() {
+        _safeSetState(() {
           isActive = active;
         });
 
@@ -521,35 +853,22 @@ class _DriverPageState extends State<DriverPage> {
         } else {
           _stopLocationUpdates();
           // Clear notifications when going offline
-          setState(() {
+          _safeSetState(() {
             notifications = [];
           });
-          // Optionally clear rejected rides when going offline
-          // await _cleanupOldRejectedRides();
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              active
-                  ? 'You are now available for rides'
-                  : 'You are now offline',
-            ),
-            backgroundColor: active ? Colors.green : Colors.orange,
-          ),
+        _showSnackBar(
+          active ? 'You are now available for rides' : 'You are now offline',
+          backgroundColor: active ? Colors.green : Colors.orange,
         );
       } else {
         throw Exception('Failed to update status: ${response.statusCode}');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error updating status: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showSnackBar('Error updating status: $e', backgroundColor: Colors.red);
     } finally {
-      setState(() {
+      _safeSetState(() {
         isLoading = false;
       });
     }
@@ -573,17 +892,17 @@ class _DriverPageState extends State<DriverPage> {
         },
       );
 
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
         // Remove the accepted ride from notifications
-        setState(() {
+        _safeSetState(() {
           notifications.removeWhere((notif) => notif['id'] == rideId);
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ride accepted successfully! ✅'),
-            backgroundColor: Colors.green,
-          ),
+        _showSnackBar(
+          'Ride accepted successfully! ✅',
+          backgroundColor: Colors.green,
         );
 
         // Navigate to ride tracking page
@@ -620,14 +939,9 @@ class _DriverPageState extends State<DriverPage> {
         throw Exception('Failed to accept ride: ${response.statusCode}');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error accepting ride: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showSnackBar('Error accepting ride: $e', backgroundColor: Colors.red);
     } finally {
-      setState(() {
+      _safeSetState(() {
         isLoading = false;
       });
     }
@@ -644,28 +958,23 @@ class _DriverPageState extends State<DriverPage> {
       // Add to local rejected rides list (client-side filtering)
       await _addRejectedRide(rideId);
 
+      if (!mounted) return;
+
       // Remove the rejected ride from current notifications
-      setState(() {
+      _safeSetState(() {
         notifications.removeWhere((notif) => notif['id'] == rideId);
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Ride rejected - hidden from your list! ❌'),
-          backgroundColor: Colors.orange,
-        ),
+      _showSnackBar(
+        'Ride rejected - hidden from your list! ❌',
+        backgroundColor: Colors.orange,
       );
 
       print('Ride $rideId rejected and hidden locally');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error rejecting ride: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showSnackBar('Error rejecting ride: $e', backgroundColor: Colors.red);
     } finally {
-      setState(() {
+      _safeSetState(() {
         isLoading = false;
       });
     }
@@ -820,7 +1129,8 @@ class _DriverPageState extends State<DriverPage> {
                     builder: (context) => ProfilePage(
                       userType: 'Driver',
                       userName: widget.userData?['username'] ?? 'E-Rick Driver',
-                      userEmail: widget.userData?['email'] ?? 'driver@erick.com',
+                      userEmail:
+                          widget.userData?['email'] ?? 'driver@erick.com',
                       accessToken: widget.jwtToken,
                     ),
                   ),
@@ -828,21 +1138,29 @@ class _DriverPageState extends State<DriverPage> {
               } else if (value == 'rides') {
                 if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No access token available. Please login to view previous rides.')),
+                    const SnackBar(
+                      content: Text(
+                        'No access token available. Please login to view previous rides.',
+                      ),
+                    ),
                   );
                   return;
                 }
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => PreviousRidesPage(jwtToken: widget.jwtToken!),
+                    builder: (context) =>
+                        PreviousRidesPage(jwtToken: widget.jwtToken!),
                   ),
                 );
               }
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
-              const PopupMenuItem(value: 'rides', child: Text('Previous Rides')),
+              const PopupMenuItem(
+                value: 'rides',
+                child: Text('Previous Rides'),
+              ),
             ],
           ),
           const SizedBox(width: 8),
@@ -929,6 +1247,109 @@ class _DriverPageState extends State<DriverPage> {
                           ),
                           child: Column(
                             children: [
+                              if (_socketStatusMessage != null)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  decoration: BoxDecoration(
+                                    color: _isSocketConnected
+                                        ? Colors.green[100]
+                                        : Colors.orange[100],
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        _isSocketConnected
+                                            ? Icons.wifi
+                                            : Icons.wifi_off,
+                                        color: _isSocketConnected
+                                            ? Colors.green
+                                            : Colors.orange,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _socketStatusMessage!,
+                                          style: TextStyle(
+                                            color: _isSocketConnected
+                                                ? Colors.green[900]
+                                                : Colors.orange[900],
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                      if (!_isSocketConnected &&
+                                          _canUseDriverSocket)
+                                        IconButton(
+                                          icon: const Icon(Icons.refresh),
+                                          tooltip: 'Reconnect',
+                                          onPressed: _manualSocketReconnect,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              if (_lastSocketMessageAt != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      'Last socket heartbeat: ${_formatTimestamp(_lastSocketMessageAt)}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (_lastRideReceivedAt != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      'Last ride payload: ${_formatTimestamp(_lastRideReceivedAt)}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (_socketReconnectAttempts > 0)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      'Reconnect attempt #$_socketReconnectAttempts scheduled',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.orange,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (_lastSocketError != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      'Last socket error: $_lastSocketError',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.red,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
@@ -1117,20 +1538,20 @@ class _DriverPageState extends State<DriverPage> {
                                                 ),
                                                 const SizedBox(height: 8),
                                                 // Requests list
-                                                ...notifications
-                                                    .map(
-                                                      (notif) => Card(
-                                                        margin:
-                                                            const EdgeInsets.only(
-                                                              bottom: 8,
-                                                            ),
-                                                        child: ListTile(
-                                                          leading: CircleAvatar(
-                                                            backgroundColor:
-                                                                Colors.blue,
-                                                            child: Text(
-                                                              '#${notif['id']}',
-                                                              style: const TextStyle(
+                                                ...notifications.map(
+                                                  (notif) => Card(
+                                                    margin:
+                                                        const EdgeInsets.only(
+                                                          bottom: 8,
+                                                        ),
+                                                    child: ListTile(
+                                                      leading: CircleAvatar(
+                                                        backgroundColor:
+                                                            Colors.blue,
+                                                        child: Text(
+                                                          '#${notif['id']}',
+                                                          style:
+                                                              const TextStyle(
                                                                 color: Colors
                                                                     .white,
                                                                 fontSize: 12,
@@ -1138,69 +1559,62 @@ class _DriverPageState extends State<DriverPage> {
                                                                     FontWeight
                                                                         .bold,
                                                               ),
-                                                            ),
-                                                          ),
-                                                          title: Text(
-                                                            notif['passenger_name'] ??
-                                                                'Unknown',
-                                                            style:
-                                                                const TextStyle(
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .bold,
-                                                                ),
-                                                          ),
-                                                          subtitle: Column(
-                                                            crossAxisAlignment:
-                                                                CrossAxisAlignment
-                                                                    .start,
-                                                            children: [
-                                                              Text(
-                                                                'From: ${notif['start']}',
-                                                              ),
-                                                              Text(
-                                                                'To: ${notif['end']}',
-                                                              ),
-                                                              Text(
-                                                                'Passengers: ${notif['people']} • ${notif['distance']}m away',
-                                                              ),
-                                                            ],
-                                                          ),
-                                                          trailing: Container(
-                                                            padding:
-                                                                const EdgeInsets.symmetric(
-                                                                  horizontal: 8,
-                                                                  vertical: 4,
-                                                                ),
-                                                            decoration:
-                                                                BoxDecoration(
-                                                                  color: Colors
-                                                                      .green,
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        12,
-                                                                      ),
-                                                                ),
-                                                            child: const Text(
-                                                              'TAP',
-                                                              style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 10,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                              ),
-                                                            ),
-                                                          ),
-                                                          onTap: () =>
-                                                              _showBottomSheet(
-                                                                notif,
-                                                              ),
                                                         ),
                                                       ),
-                                                    )
-                                                    ,
+                                                      title: Text(
+                                                        notif['passenger_name'] ??
+                                                            'Unknown',
+                                                        style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                      subtitle: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          Text(
+                                                            'From: ${notif['start']}',
+                                                          ),
+                                                          Text(
+                                                            'To: ${notif['end']}',
+                                                          ),
+                                                          Text(
+                                                            'Passengers: ${notif['people']} • ${notif['distance']}m away',
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      trailing: Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 8,
+                                                              vertical: 4,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.green,
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        child: const Text(
+                                                          'TAP',
+                                                          style: TextStyle(
+                                                            color: Colors.white,
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      onTap: () =>
+                                                          _showBottomSheet(
+                                                            notif,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
                                               ],
                                             )
                                           : Center(

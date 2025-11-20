@@ -4,29 +4,21 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db.models import Q
-from math import radians, cos, sin, asin, sqrt
-from .models import User, DriverProfile, RideRequest
+from .models import User, DriverProfile, RideRequest, RideOffer
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
     RideRequestCreateSerializer, LocationUpdateSerializer,
     DriverStatusSerializer, RideCancelSerializer
 )
-
-
-def calculate_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance between two points in meters using Haversine formula"""
-    # Convert decimal degrees to radians
-    lat1, lon1, lat2, lon2 = map(radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
-    
-    # Haversine formula
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    
-    # Radius of earth in meters
-    r = 6371000
-    return c * r
+from .notifications import (
+    build_offers_for_ride,
+    dispatch_next_offer,
+    notify_driver_event,
+    notify_passenger_event,
+    broadcast_driver_status_change,
+    broadcast_driver_location_update
+)
+from .utils import calculate_distance
 
 @api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
@@ -113,8 +105,12 @@ def update_driver_status(request):
     # PUT or PATCH request
     serializer = DriverStatusSerializer(data=request.data)
     if serializer.is_valid():
+        old_status = profile.status
         profile.status = serializer.validated_data['status']
         profile.save()
+        
+        # Broadcast status change to all passengers
+        broadcast_driver_status_change(profile, old_status)
         
         return Response({
             'status': profile.status,
@@ -155,10 +151,29 @@ def update_driver_location(request):
     # POST, PUT, or PATCH - Update location
     serializer = LocationUpdateSerializer(data=request.data)
     if serializer.is_valid():
+        old_lat = profile.current_latitude
+        old_lon = profile.current_longitude
+        
         profile.current_latitude = serializer.validated_data['latitude']
         profile.current_longitude = serializer.validated_data['longitude']
         profile.last_location_update = timezone.now()
         profile.save()
+        
+        # Broadcast location update to passengers if driver is available
+        # and location changed significantly (for efficiency)
+        if profile.status == 'available':
+            if old_lat is None or old_lon is None:
+                # First time setting location, broadcast it
+                broadcast_driver_location_update(profile)
+            else:
+                # Check if location changed by more than ~100 meters
+                from .utils import calculate_distance
+                distance_moved = calculate_distance(
+                    float(old_lat), float(old_lon),
+                    float(profile.current_latitude), float(profile.current_longitude)
+                )
+                if distance_moved > 100:  # 100 meters threshold
+                    broadcast_driver_location_update(profile)
         
         return Response({
             'message': 'Location updated successfully',
@@ -257,12 +272,23 @@ def create_ride_request(request):
     serializer = RideRequestCreateSerializer(data=request.data)
     if serializer.is_valid():
         ride = serializer.save(passenger=request.user)
+        offers = build_offers_for_ride(ride)
+        if offers:
+            dispatch_next_offer(ride)
+        driver_candidates = len(offers)
+        response_message = (
+            'Notifying nearby drivers...'
+            if driver_candidates
+            else 'No available drivers found nearby yet. We will keep searching.'
+        )
         
         # ✅ No WebSocket - Drivers will discover via polling
         response_serializer = RideRequestSerializer(ride)
         return Response({
             **response_serializer.data,
-            'message': 'Finding nearby drivers...'
+            'message': response_message,
+            'driver_candidates': driver_candidates,
+            'sequential_notifications': driver_candidates > 0
         }, status=status.HTTP_201_CREATED)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -285,7 +311,7 @@ def get_current_ride(request):
     
     ride = RideRequest.objects.filter(
         passenger=request.user,
-        status__in=['pending', 'accepted']
+        status__in=['pending', 'accepted', 'no_drivers']
     ).select_related('driver__driver_profile').first()
     
     if not ride:
@@ -311,6 +337,9 @@ def get_current_ride(request):
     elif ride.status == 'accepted':
         response_data['message'] = 'Driver is on the way!'
         response_data['driver_assigned'] = True
+    elif ride.status == 'no_drivers':
+        response_data['message'] = 'No drivers available at the moment. You can cancel and try again later.'
+        response_data['driver_assigned'] = False
     
     return Response(response_data)
 
@@ -347,17 +376,39 @@ def cancel_ride(request, ride_id):
     if serializer.is_valid():
         # Store original status to check if driver was assigned
         had_driver = ride.driver is not None
-        
+
         ride.status = 'cancelled_user'
         ride.cancelled_at = timezone.now()
         ride.cancellation_reason = serializer.validated_data.get('reason', 'No reason provided')
-        ride.save()
-        
+        ride.save(update_fields=['status', 'cancelled_at', 'cancellation_reason'])
+
         # If ride was accepted, make driver available again
         if had_driver and hasattr(ride.driver, 'driver_profile'):
             ride.driver.driver_profile.status = 'available'
-            ride.driver.driver_profile.save()
-        
+            ride.driver.driver_profile.save(update_fields=['status'])
+
+        notified_driver_ids = set()
+        if had_driver:
+            notify_driver_event(
+                'ride_cancelled',
+                ride,
+                ride.driver_id,
+                'Passenger cancelled this ride.',
+            )
+            notified_driver_ids.add(ride.driver_id)
+
+        viewed_offer_driver_ids = ride.offers.filter(sent_at__isnull=False).values_list('driver_id', flat=True)
+        for driver_id in viewed_offer_driver_ids:
+            if driver_id in notified_driver_ids:
+                continue
+            notify_driver_event(
+                'ride_cancelled',
+                ride,
+                driver_id,
+                'Ride request cancelled before assignment.',
+            )
+            notified_driver_ids.add(driver_id)
+
         return Response({
             'success': True,
             'message': 'Ride cancelled successfully',
@@ -481,7 +532,7 @@ def nearby_rides(request):
     return Response({
         'rides': nearby_rides_data,
         'count': len(nearby_rides_data),
-        'broadcast_radius': 500,  # Show the search radius
+    'broadcast_radius': 1000,  # Show the search radius
         'driver_location': {
             'latitude': float(driver_lat),
             'longitude': float(driver_lon)
@@ -492,17 +543,13 @@ def nearby_rides(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def accept_ride(request, ride_id):
-    """
-    Accept a ride request (first-come-first-served)
-    
-    Handles race conditions when multiple drivers try to accept same ride
-    """
+    """Accept a ride request that was offered to this driver."""
     if request.user.role != 'driver':
         return Response(
             {'error': 'Only drivers can accept rides'},
             status=status.HTTP_403_FORBIDDEN
         )
-    
+
     try:
         driver_profile = request.user.driver_profile
     except DriverProfile.DoesNotExist:
@@ -510,49 +557,159 @@ def accept_ride(request, ride_id):
             {'error': 'Driver profile not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
-    # Check if driver is available
+
     if driver_profile.status != 'available':
         return Response(
             {
                 'success': False,
-                'error': 'You must be available to accept rides',
-                'message': 'Please set your status to available first'
+                'error': 'driver_not_available',
+                'message': 'Please set your status to available before accepting rides.'
             },
             status=status.HTTP_400_BAD_REQUEST
         )
-    
-    # Try to get ride with status='pending' (race condition protection)
+
     try:
-        ride = RideRequest.objects.get(id=ride_id, status='pending')
+        ride = RideRequest.objects.select_related('passenger').get(id=ride_id, status='pending')
     except RideRequest.DoesNotExist:
-        # Ride doesn't exist or already accepted/cancelled
         return Response(
             {
                 'success': False,
                 'error': 'ride_not_available',
-                'message': 'This ride has already been accepted by another driver or cancelled',
+                'message': 'This ride was already handled or cancelled.',
                 'ride_id': ride_id
             },
             status=status.HTTP_400_BAD_REQUEST
         )
-    
-    # Accept the ride (atomic operation)
+
+    # Enforce ledger-based acceptance only if offers exist for this ride
+    offer_qs = ride.offers.filter(driver=request.user)
+    if offer_qs.exists():
+        offer = offer_qs.filter(status='pending').order_by('order').first()
+        if not offer:
+            # Check if offer was expired due to timeout
+            expired_offer = offer_qs.filter(status='expired').first()
+            if expired_offer:
+                return Response(
+                    {
+                        'success': False,
+                        'error': 'offer_expired',
+                        'message': 'This ride offer has timed out. Please wait for new ride requests.'
+                    },
+                    status=status.HTTP_410_GONE
+                )
+            return Response(
+                {
+                    'success': False,
+                    'error': 'offer_not_found',
+                    'message': 'This ride offer is no longer active for you.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    else:
+        offer = None  # Backwards compatibility for rides created pre-ledger rollout
+
     ride.driver = request.user
     ride.status = 'accepted'
     ride.accepted_at = timezone.now()
-    ride.save()
-    
-    # Update driver status to busy
+    ride.save(update_fields=['driver', 'status', 'accepted_at'])
+
+    if offer:
+        offer.status = 'accepted'
+        offer.responded_at = timezone.now()
+        offer.save(update_fields=['status', 'responded_at'])
+        ride.offers.exclude(id=offer.id).filter(status='pending').update(
+            status='expired',
+            responded_at=timezone.now()
+        )
+
+    other_driver_ids = (
+        ride.offers
+        .filter(sent_at__isnull=False)
+        .exclude(driver=request.user)
+        .values_list('driver_id', flat=True)
+    )
+    for driver_id in other_driver_ids:
+        notify_driver_event(
+            'ride_accepted',
+            ride,
+            driver_id,
+            'Another driver accepted this ride.',
+        )
+
+    # Notify passenger that their ride was accepted
+    from .notifications import notify_passenger_event
+    notify_passenger_event(
+        'ride_accepted_by_driver',
+        ride,
+        'Your ride has been accepted! The driver is on the way.',
+    )
+
     driver_profile.status = 'busy'
-    driver_profile.save()
-    
-    # ✅ Success - Driver got the ride
+    driver_profile.save(update_fields=['status'])
+
     serializer = RideRequestSerializer(ride)
     return Response({
         'success': True,
         'ride': serializer.data,
         'message': 'Ride accepted successfully! Navigate to pickup location.'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reject_ride_offer(request, ride_id):
+    """Allow drivers to reject a pending ride offer and trigger the next notification."""
+    if request.user.role != 'driver':
+        return Response(
+            {'error': 'Only drivers can reject rides'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        driver_profile = request.user.driver_profile
+    except DriverProfile.DoesNotExist:
+        return Response(
+            {'error': 'Driver profile not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    try:
+        ride = RideRequest.objects.get(id=ride_id, status='pending')
+    except RideRequest.DoesNotExist:
+        return Response(
+            {
+                'success': False,
+                'error': 'ride_not_available',
+                'message': 'This ride was already handled or cancelled.'
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    offer = ride.offers.filter(driver=request.user, status='pending').order_by('order').first()
+    if not offer:
+        return Response(
+            {
+                'success': False,
+                'error': 'offer_not_found',
+                'message': 'No active offer found for this ride.'
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    offer.status = 'rejected'
+    offer.responded_at = timezone.now()
+    offer.save(update_fields=['status', 'responded_at'])
+
+    dispatched = dispatch_next_offer(ride)
+    if not dispatched and not ride.offers.filter(status='pending').exists():
+        ride.status = 'no_drivers'
+        ride.save(update_fields=['status'])
+
+    return Response({
+        'success': True,
+        'ride_id': ride.id,
+        'queued_next_driver': dispatched,
+        'message': 'Offer declined. We will notify the next available driver.' if dispatched else 'No more drivers available for this ride.'
     })
 
 

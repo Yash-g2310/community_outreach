@@ -67,30 +67,55 @@ class RideNotificationConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             pass
     
+
     async def new_ride_request(self, event):
         """
-        Called when a new ride request is broadcast to drivers
+        Called when a new ride request is sent to drivers one by one
         Receives event from channel layer
         """
+        driver_id = event.get("driver_id")
+        if driver_id is not None and driver_id != self.user.id:
+            return
+
         await self.send(text_data=json.dumps({
-            'type': 'new_ride_request',
-            'ride': event['ride_data']
+            "type": "new_ride_request",
+            "ride": event["ride_data"],
         }))
-    
+
     async def ride_cancelled(self, event):
         """Notify drivers when a ride is cancelled"""
+        driver_id = event.get("driver_id")
+        if driver_id is not None and driver_id != self.user.id:
+            return
+        
         await self.send(text_data=json.dumps({
             'type': 'ride_cancelled',
             'ride_id': event['ride_id'],
             'message': 'This ride request has been cancelled'
         }))
-    
+
     async def ride_accepted(self, event):
         """Notify drivers when a ride has been accepted by another driver"""
+        driver_id = event.get("driver_id")
+        if driver_id is not None and driver_id != self.user.id:
+            return
+        
         await self.send(text_data=json.dumps({
             'type': 'ride_accepted',
             'ride_id': event['ride_id'],
             'message': 'This ride has been accepted by another driver'
+        }))
+
+    async def ride_expired(self, event):
+        """Notify driver when their ride offer has timed out"""
+        driver_id = event.get("driver_id")
+        if driver_id is not None and driver_id != self.user.id:
+            return
+        
+        await self.send(text_data=json.dumps({
+            'type': 'ride_expired',
+            'ride_id': event['ride_id'],
+            'message': event.get('message', 'This ride offer has timed out')
         }))
 
 
@@ -211,3 +236,160 @@ class RideTrackingConsumer(AsyncWebsocketConsumer):
             return False
         except RideRequest.DoesNotExist:
             return False
+
+
+class PassengerRideStatusConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for passengers to receive ride status updates
+    
+    Connection URL: ws://localhost:8000/ws/passenger/ride-status/
+    
+    Passengers connect to receive real-time updates about their ride requests
+    (e.g., driver accepted, no drivers available, etc.)
+    """
+    
+    async def connect(self):
+        self.user = self.scope["user"]
+        
+        if self.user.is_anonymous:
+            await self.close()
+            return
+        
+        if self.user.role != 'user':
+            await self.close()
+            return
+        
+        # Add passenger to their personal notification group
+        self.passenger_group = f'passenger_{self.user.id}'
+        await self.channel_layer.group_add(
+            self.passenger_group,
+            self.channel_name
+        )
+        
+        await self.accept()
+        
+        await self.send(text_data=json.dumps({
+            'type': 'connection_established',
+            'message': 'Connected to ride status updates'
+        }))
+    
+    async def disconnect(self, close_code):
+        # Remove from passenger group
+        if hasattr(self, 'passenger_group'):
+            await self.channel_layer.group_discard(
+                self.passenger_group,
+                self.channel_name
+            )
+    
+    async def receive(self, text_data):
+        """Handle messages from passenger (e.g., ping)"""
+        try:
+            data = json.loads(text_data)
+            message_type = data.get('type')
+            
+            if message_type == 'ping':
+                await self.send(text_data=json.dumps({
+                    'type': 'pong',
+                    'message': 'Connection alive'
+                }))
+        except json.JSONDecodeError:
+            pass
+    
+    async def no_drivers_available(self, event):
+        """Notify passenger when no drivers accepted their ride request"""
+        await self.send(text_data=json.dumps({
+            'type': 'no_drivers_available',
+            'ride_id': event['ride_id'],
+            'status': event['status'],
+            'message': event.get('message', 'No drivers are available at the moment'),
+            'ride': event.get('ride_data', {})
+        }))
+    
+    async def ride_accepted_by_driver(self, event):
+        """Notify passenger when a driver accepts their ride"""
+        await self.send(text_data=json.dumps({
+            'type': 'ride_accepted',
+            'ride_id': event['ride_id'],
+            'status': event['status'],
+            'message': event.get('message', 'A driver has accepted your ride!'),
+            'ride': event.get('ride_data', {})
+        }))
+
+
+class NearbyDriversConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for passengers to receive real-time updates about nearby drivers
+    
+    Connection URL: ws://localhost:8000/ws/passenger/nearby-drivers/
+    
+    Broadcasts when:
+    - A driver goes online/offline
+    - A driver's location changes significantly
+    """
+    
+    async def connect(self):
+        self.user = self.scope["user"]
+        
+        if self.user.is_anonymous:
+            await self.close()
+            return
+        
+        if self.user.role != 'user':
+            await self.close()
+            return
+        
+        # Add passenger to the 'passengers' group to receive driver status updates
+        self.passengers_group = 'all_passengers'
+        await self.channel_layer.group_add(
+            self.passengers_group,
+            self.channel_name
+        )
+        
+        await self.accept()
+        
+        await self.send(text_data=json.dumps({
+            'type': 'connection_established',
+            'message': 'Connected to nearby drivers updates'
+        }))
+    
+    async def disconnect(self, close_code):
+        # Remove from passengers group
+        if hasattr(self, 'passengers_group'):
+            await self.channel_layer.group_discard(
+                self.passengers_group,
+                self.channel_name
+            )
+    
+    async def receive(self, text_data):
+        """Handle messages from passenger (e.g., ping)"""
+        try:
+            data = json.loads(text_data)
+            message_type = data.get('type')
+            
+            if message_type == 'ping':
+                await self.send(text_data=json.dumps({
+                    'type': 'pong',
+                    'message': 'Connection alive'
+                }))
+        except json.JSONDecodeError:
+            pass
+    
+    async def driver_status_changed(self, event):
+        """Notify passengers when a driver goes online/offline"""
+        await self.send(text_data=json.dumps({
+            'type': 'driver_status_changed',
+            'driver_id': event['driver_id'],
+            'status': event['status'],
+            'latitude': event.get('latitude'),
+            'longitude': event.get('longitude'),
+            'message': event.get('message', '')
+        }))
+    
+    async def driver_location_updated(self, event):
+        """Notify passengers when a driver's location changes significantly"""
+        await self.send(text_data=json.dumps({
+            'type': 'driver_location_updated',
+            'driver_id': event['driver_id'],
+            'latitude': event['latitude'],
+            'longitude': event['longitude']
+        }))

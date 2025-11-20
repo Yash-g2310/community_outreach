@@ -82,8 +82,8 @@ class RideRequest(models.Model):
     # Status & timing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
-    # Broadcast radius in meters (0.5 km = 500 meters)
-    broadcast_radius = models.IntegerField(default=500)
+    # Broadcast radius in meters (default 1 km)
+    broadcast_radius = models.IntegerField(default=1000)
     
     # Timestamps
     requested_at = models.DateTimeField(auto_now_add=True)
@@ -100,3 +100,20 @@ class RideRequest(models.Model):
         
     def __str__(self):
         return f"Ride #{self.id} - {self.passenger.username} - {self.status}"
+    
+
+class RideOffer(models.Model):
+    ride = models.ForeignKey(RideRequest, on_delete=models.CASCADE, related_name='offers')
+    driver = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'driver'})
+    order = models.PositiveIntegerField()  # 0 = closest driver
+    status = models.CharField(
+        max_length=20,
+        choices=[('pending', 'Pending'), ('accepted', 'Accepted'), ('rejected', 'Rejected'), ('expired', 'Expired')],
+        default='pending',
+    )
+    sent_at = models.DateTimeField(null=True, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('ride', 'driver')
+        ordering = ['order']
