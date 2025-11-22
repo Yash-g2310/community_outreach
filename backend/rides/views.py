@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from channels.layers import get_channel_layer
 
-from backend.rides.consumers import notify_nearby_passengers_sync
+from .consumers import notify_nearby_passengers_sync
 from .models import DriverProfile, RideRequest
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
