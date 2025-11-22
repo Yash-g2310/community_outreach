@@ -217,6 +217,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  // TODO: Remove this function later as it's only for Chrome Based Testing
   Future<Map<String, String?>> _bootstrapSession(String accessToken) async {
     try {
       final response = await http.post(

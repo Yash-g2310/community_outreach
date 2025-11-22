@@ -15,6 +15,7 @@ class RideLoadingScreen extends StatefulWidget {
   final String? userRole;
   final String? sessionId;
   final String? csrfToken;
+  final String? jwtToken;
 
   const RideLoadingScreen({
     super.key,
@@ -22,6 +23,7 @@ class RideLoadingScreen extends StatefulWidget {
     this.userName,
     this.userEmail,
     this.userRole,
+    this.jwtToken,
     this.sessionId,
     this.csrfToken,
   });
@@ -68,8 +70,23 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
   // ============================================================
   void _connectPassengerSocket() {
     try {
-      final uri = Uri.parse(
-        'ws://127.0.0.1:8000/ws/passenger/ride-status/?sessionid=&csrftoken=',
+      // Build URI for unified socket
+      final uri = Uri(
+        scheme: 'ws',
+        host: '127.0.0.1',
+        port: 8000,
+        path: '/ws/app/',
+        queryParameters: {
+          // You can supply ANY of these:
+          if (widget.jwtToken?.isNotEmpty ?? false)
+            'token': widget.jwtToken!, // For mobile
+
+          if (widget.sessionId?.isNotEmpty ?? false)
+            'sessionid': widget.sessionId!, // For chrome
+
+          if (widget.csrfToken?.isNotEmpty ?? false)
+            'csrftoken': widget.csrfToken!, // For chrome
+        },
       );
 
       _passengerSocket = createPlatformWebSocket(uri);
@@ -87,7 +104,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
         },
       );
 
-      print('✅ Passenger WebSocket connected');
+      print('✅ Passenger WebSocket connected: $uri');
     } catch (e) {
       print('❌ Failed to connect passenger WebSocket: $e');
     }

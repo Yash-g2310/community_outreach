@@ -181,17 +181,22 @@ class _DriverPageState extends State<DriverPage> {
   String get _driverSocketUrl {
     final sanitizedBase = baseUrl.replaceFirst(RegExp(r'^https?://'), '');
     final scheme = baseUrl.startsWith('https') ? 'wss://' : 'ws://';
-    final uri = Uri.parse('$scheme$sanitizedBase/ws/driver/rides/');
+
+    final uri = Uri.parse('$scheme$sanitizedBase/ws/app/');
+
     final queryParams = <String, String>{};
+
+    // mobile app – JWT token
+    if (widget.jwtToken?.isNotEmpty ?? false) {
+      queryParams['token'] = widget.jwtToken!;
+    }
+
+    // chrome testing – sessionid + csrftoken
     if (widget.sessionId?.isNotEmpty ?? false) {
       queryParams['sessionid'] = widget.sessionId!;
     }
     if (widget.csrfToken?.isNotEmpty ?? false) {
       queryParams['csrftoken'] = widget.csrfToken!;
-    }
-
-    if (queryParams.isEmpty) {
-      return uri.toString();
     }
 
     return uri.replace(queryParameters: queryParams).toString();

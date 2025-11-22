@@ -52,6 +52,9 @@ class UserMapScreen extends StatefulWidget {
   final String? userName;
   final String? userEmail;
   final String? userRole;
+  final String? sessionId;
+  final String? csrfToken;
+  final String? jwtToken;
   final String? accessToken;
 
   const UserMapScreen({
@@ -59,6 +62,9 @@ class UserMapScreen extends StatefulWidget {
     this.userName,
     this.userEmail,
     this.userRole,
+    this.sessionId,
+    this.csrfToken,
+    this.jwtToken,
     this.accessToken,
   });
 
@@ -226,8 +232,18 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   void _connectPassengerSocket() {
     try {
-      final uri = Uri.parse(
-        'ws://127.0.0.1:8000/ws/passenger/ride-status/?sessionid=&csrftoken=',
+      final uri = Uri(
+        scheme: 'ws',
+        host: '127.0.0.1',
+        port: 8000,
+        path: '/ws/app/',
+        queryParameters: {
+          if (widget.jwtToken?.isNotEmpty ?? false) 'token': widget.jwtToken!,
+          if (widget.sessionId?.isNotEmpty ?? false)
+            'sessionid': widget.sessionId!,
+          if (widget.csrfToken?.isNotEmpty ?? false)
+            'csrftoken': widget.csrfToken!,
+        },
       );
 
       _passengerSocket = createPlatformWebSocket(uri);
@@ -245,7 +261,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         },
       );
 
-      print('✅ Passenger WebSocket connected (user_page)');
+      print('✅ Passenger WebSocket connected: $uri (user_page)');
     } catch (e) {
       print('❌ Failed to connect passenger WebSocket: $e');
     }
