@@ -3,10 +3,8 @@ import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'utils/socket_channel_factory.dart';
-import 'user_tracking_page.dart'; // ✅ ensure this exists
-import 'user_page.dart'; // ✅ for navigation back after cancel
+import 'user_tracking_page.dart';
+import 'user_page.dart';
 
 class RideLoadingScreen extends StatefulWidget {
   final String accessToken; // ✅ for API call
@@ -16,6 +14,8 @@ class RideLoadingScreen extends StatefulWidget {
   final String? sessionId;
   final String? csrfToken;
   final String? jwtToken;
+  final dynamic passengerSocket;
+  final StreamSubscription? socketSubscription;
 
   const RideLoadingScreen({
     super.key,
@@ -26,6 +26,8 @@ class RideLoadingScreen extends StatefulWidget {
     this.jwtToken,
     this.sessionId,
     this.csrfToken,
+    this.passengerSocket,
+    this.socketSubscription,
   });
 
   @override
@@ -36,8 +38,6 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _rotationController;
   Timer? _rideStatusTimer;
-  WebSocketChannel? _passengerSocket;
-  StreamSubscription? _socketSubscription;
 
   @override
   void initState() {
@@ -49,9 +49,6 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    // � Connect to passenger WebSocket for real-time updates
-    _connectPassengerSocket();
-
     // �🔁 begin background polling (only for driver assignment)
     _startRideStatusPolling();
   }
@@ -60,110 +57,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
   void dispose() {
     _rotationController.dispose();
     _rideStatusTimer?.cancel();
-    _socketSubscription?.cancel();
-    _passengerSocket?.sink.close();
     super.dispose();
-  }
-
-  // ============================================================
-  // � Connect to passenger WebSocket for real-time updates
-  // ============================================================
-  void _connectPassengerSocket() {
-    try {
-      // Build URI for unified socket
-      final uri = Uri(
-        scheme: 'ws',
-        host: '127.0.0.1',
-        port: 8000,
-        path: '/ws/app/',
-        queryParameters: {
-          // You can supply ANY of these:
-          if (widget.jwtToken?.isNotEmpty ?? false)
-            'token': widget.jwtToken!, // For mobile
-
-          if (widget.sessionId?.isNotEmpty ?? false)
-            'sessionid': widget.sessionId!, // For chrome
-
-          if (widget.csrfToken?.isNotEmpty ?? false)
-            'csrftoken': widget.csrfToken!, // For chrome
-        },
-      );
-
-      _passengerSocket = createPlatformWebSocket(uri);
-
-      _socketSubscription = _passengerSocket!.stream.listen(
-        (message) {
-          if (!mounted) return;
-          _handlePassengerSocketMessage(message);
-        },
-        onError: (error) {
-          print('⚠️ Passenger WebSocket error: $error');
-        },
-        onDone: () {
-          print('🔌 Passenger WebSocket connection closed');
-        },
-      );
-
-      print('✅ Passenger WebSocket connected: $uri');
-    } catch (e) {
-      print('❌ Failed to connect passenger WebSocket: $e');
-    }
-  }
-
-  // ============================================================
-  // 📨 Handle incoming WebSocket messages
-  // ============================================================
-  void _handlePassengerSocketMessage(dynamic message) {
-    try {
-      final data = jsonDecode(message);
-      final eventType = data['type'];
-
-      print('📩 Passenger WS event: $eventType');
-
-      if (eventType == 'no_drivers_available') {
-        _handleNoDriversAvailable(data);
-      } else if (eventType == 'ride_accepted') {
-        // Driver accepted - the polling will handle navigation
-        print('✅ Driver accepted ride');
-      }
-    } catch (e) {
-      print('⚠️ Error parsing passenger WebSocket message: $e');
-    }
-  }
-
-  // ============================================================
-  // ❌ Handle no drivers available notification
-  // ============================================================
-  void _handleNoDriversAvailable(Map<String, dynamic> data) {
-    print('❌ No drivers available — navigating back to map');
-    _rideStatusTimer?.cancel();
-    _socketSubscription?.cancel();
-    _passengerSocket?.sink.close();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            data['message'] ??
-                'No drivers are available at the moment. Please try again later.',
-          ),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => UserMapScreen(
-            accessToken: widget.accessToken,
-            userName: widget.userName,
-            userEmail: widget.userEmail,
-            userRole: widget.userRole,
-          ),
-        ),
-      );
-    }
   }
 
   // ============================================================

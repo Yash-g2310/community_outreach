@@ -2,7 +2,6 @@ import urllib.parse
 from urllib.parse import parse_qs
 from django.contrib.auth import get_user_model
 from channels.middleware import BaseMiddleware
-from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.tokens import AccessToken
 from asgiref.sync import sync_to_async
 
@@ -17,6 +16,7 @@ class JWTOrCookieAuthMiddleware(BaseMiddleware):
     """
 
     async def __call__(self, scope, receive, send):
+        from django.contrib.auth.models import AnonymousUser
         query_string = scope.get("query_string", b"").decode()
         params = parse_qs(query_string)
 

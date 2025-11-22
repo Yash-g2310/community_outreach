@@ -6,7 +6,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'utils/socket_channel_factory.dart';
 import 'user_page.dart'; // ✅ for navigation back to user page
 
 class UserTrackingPage extends StatefulWidget {
@@ -14,6 +13,8 @@ class UserTrackingPage extends StatefulWidget {
   final String? userName;
   final String? userEmail;
   final String? userRole;
+  final WebSocketChannel? passengerSocket;
+  final StreamSubscription? socketSubscription;
 
   const UserTrackingPage({
     super.key,
@@ -21,6 +22,8 @@ class UserTrackingPage extends StatefulWidget {
     this.userName,
     this.userEmail,
     this.userRole,
+    this.passengerSocket,
+    this.socketSubscription,
   });
 
   @override
@@ -43,13 +46,15 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   @override
   void initState() {
     super.initState();
+    _rideTrackingSocket = widget.passengerSocket;
+    _socketSubscription = widget.socketSubscription;
     _initializeTracking();
   }
 
   @override
   void dispose() {
-    _socketSubscription?.cancel();
-    _rideTrackingSocket?.sink.close();
+    _sendStopTracking();
+    // Do NOT close the shared socket, only cancel local listeners if any
     super.dispose();
   }
 
@@ -57,7 +62,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     await _getUserLocation();
     await _getCurrentRideInfo(); // Get ride ID and initial driver info
     if (_currentRideId != null) {
-      _connectRideTrackingSocket();
+      _sendStartTracking();
     }
   }
 
@@ -117,130 +122,27 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     }
   }
 
-  // ============================================================
-  // 🔌 Connect to ride tracking WebSocket
-  // ============================================================
-  void _connectRideTrackingSocket() {
-    if (_currentRideId == null) {
-      print('❌ Cannot connect WebSocket: No ride ID');
-      return;
-    }
-
-    try {
-      final uri = Uri.parse(
-        'ws://127.0.0.1:8000/ws/ride/$_currentRideId/passenger/?sessionid=&csrftoken=',
-      );
-
-      _rideTrackingSocket = createPlatformWebSocket(uri);
-
-      _socketSubscription = _rideTrackingSocket!.stream.listen(
-        (message) {
-          if (!mounted) return;
-          _handleRideTrackingMessage(message);
-        },
-        onError: (error) {
-          print('⚠️ Ride tracking WebSocket error: $error');
-        },
-        onDone: () {
-          print('🔌 Ride tracking WebSocket closed');
-        },
-      );
-
-      print(
-        '✅ Connected to ride tracking WebSocket (ride ID: $_currentRideId)',
-      );
-    } catch (e) {
-      print('❌ Failed to connect ride tracking WebSocket: $e');
-    }
-  }
-
-  // ============================================================
-  // 📨 Handle WebSocket messages
-  // ============================================================
-  void _handleRideTrackingMessage(dynamic message) {
-    try {
-      final data = jsonDecode(message);
-      final eventType = data['type'];
-
-      print('📩 Ride tracking WS event: $eventType');
-
-      if (eventType == 'location_update') {
-        _handleLocationUpdate(data);
-      } else if (eventType == 'ride_status_update') {
-        _handleRideStatusUpdate(data);
-      } else if (eventType == 'connection_established') {
-        print('✅ Ride tracking WebSocket connected');
-      }
-    } catch (e) {
-      print('⚠️ Error parsing ride tracking message: $e');
-    }
-  }
-
-  // ============================================================
-  // 📍 Handle driver location updates
-  // ============================================================
-  void _handleLocationUpdate(Map<String, dynamic> data) {
-    if (data['user_type'] == 'driver') {
-      final lat = data['latitude'];
-      final lng = data['longitude'];
-
-      if (lat != null && lng != null) {
-        setState(() {
-          _driverPosition = LatLng(lat, lng);
-        });
-        print('📍 Driver location updated: $lat, $lng');
-      }
-    }
-  }
-
-  // ============================================================
-  // 🔄 Handle ride status updates
-  // ============================================================
-  void _handleRideStatusUpdate(Map<String, dynamic> data) {
-    final newStatus = data['status'];
-
-    if (newStatus != null) {
-      setState(() {
-        _status = newStatus;
+  // Send start_tracking message to join ride group
+  void _sendStartTracking() {
+    if (_rideTrackingSocket != null && _currentRideId != null) {
+      final msg = jsonEncode({
+        'type': 'start_tracking',
+        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
+      _rideTrackingSocket!.sink.add(msg);
+      print('📡 Sent start_tracking for ride $_currentRideId');
+    }
+  }
 
-      // Handle terminal states
-      if (newStatus == 'completed' ||
-          newStatus == 'cancelled' ||
-          newStatus == 'no_drivers') {
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  newStatus == 'completed'
-                      ? 'Ride completed! Returning to main page...'
-                      : newStatus == 'no_drivers'
-                      ? 'No drivers available. Please try again later.'
-                      : 'Ride was cancelled. Returning to main page...',
-                ),
-                backgroundColor: newStatus == 'completed'
-                    ? Colors.green
-                    : newStatus == 'no_drivers'
-                    ? Colors.red
-                    : Colors.orange,
-              ),
-            );
-
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => UserMapScreen(
-                  userName: widget.userName,
-                  userEmail: widget.userEmail,
-                  userRole: widget.userRole,
-                  accessToken: widget.accessToken,
-                ),
-              ),
-            );
-          }
-        });
-      }
+  // Send stop_tracking message to leave ride group (optional, e.g. on dispose)
+  void _sendStopTracking() {
+    if (_rideTrackingSocket != null && _currentRideId != null) {
+      final msg = jsonEncode({
+        'type': 'stop_tracking',
+        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
+      });
+      _rideTrackingSocket!.sink.add(msg);
+      print('📡 Sent stop_tracking for ride $_currentRideId');
     }
   }
 

@@ -10,10 +10,8 @@ import 'dart:math' as math;
 import 'profile.dart';
 import 'previous_rides.dart';
 import 'utils/socket_channel_factory.dart';
-
-// If LoadingOverlayPage and UserTrackingPage are in other files,
-// make sure these imports match your project structure:
 import 'package:flutter_application_1/user_tracking_page.dart';
+import 'package:flutter_application_1/loading_page2.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -83,10 +81,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
   WebSocketChannel? _passengerSocket;
   StreamSubscription? _socketSubscription;
 
-  // WebSocket for nearby drivers real-time updates
-  WebSocketChannel? _nearbyDriversSocket;
-  StreamSubscription? _nearbyDriversSubscription;
-
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
   final TextEditingController _dropController = TextEditingController();
@@ -109,7 +103,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
     // Connect to passenger WebSocket for real-time ride status
     if (widget.accessToken != null) {
       _connectPassengerSocket();
-      _connectNearbyDriversSocket();
     }
   }
 
@@ -118,8 +111,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
     _driversUpdateTimer?.cancel();
     _socketSubscription?.cancel();
     _passengerSocket?.sink.close();
-    _nearbyDriversSubscription?.cancel();
-    _nearbyDriversSocket?.sink.close();
     _pickupController.dispose();
     _dropController.dispose();
     _passengerController.dispose();
@@ -154,6 +145,18 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       // Load nearby drivers after getting location
       _loadNearbyDrivers();
+
+      if (_passengerSocket != null) {
+        _passengerSocket!.sink.add(
+          jsonEncode({
+            "type": "subscribe_nearby",
+            "latitude": position.latitude,
+            "longitude": position.longitude,
+            "radius": 1500,
+          }),
+        );
+        print("📡 Sent subscribe_nearby after location loaded");
+      }
 
       // Real-time updates via WebSocket (no more polling!)
     } catch (e) {
@@ -262,6 +265,20 @@ class _UserMapScreenState extends State<UserMapScreen> {
       );
 
       print('✅ Passenger WebSocket connected: $uri (user_page)');
+
+      if (_currentPosition != null) {
+        _passengerSocket!.sink.add(
+          jsonEncode({
+            "type": "subscribe_nearby",
+            "latitude": _currentPosition!.latitude,
+            "longitude": _currentPosition!.longitude,
+            "radius": 5000, // or whatever radius you use
+          }),
+        );
+        print("📡 Sent subscribe_nearby to backend");
+      } else {
+        print("⚠️ Cannot subscribe_nearby — currentPosition is null");
+      }
     } catch (e) {
       print('❌ Failed to connect passenger WebSocket: $e');
     }
@@ -277,11 +294,53 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       print('📩 Passenger WS event (user_page): $eventType');
 
-      if (eventType == 'ride_accepted') {
-        // Driver accepted the ride - navigate to tracking page
-        _handleRideAccepted(data);
-      } else if (eventType == 'connection_established') {
-        print('✅ WebSocket connection confirmed');
+      switch (eventType) {
+        // ============================================================
+        // RIDE-RELATED EVENTS
+        // ============================================================
+
+        case 'ride_accepted':
+          _handleRideAccepted(data);
+          break;
+
+        case 'ride_cancelled':
+          _showErrorSnackBar('Ride was cancelled.');
+          break;
+
+        case 'ride_expired':
+          _showErrorSnackBar('Ride offer expired.');
+          break;
+
+        case 'no_drivers_available':
+          _showErrorSnackBar('No drivers available. Try again later.');
+          break;
+
+        // ============================================================
+        // CONNECTION EVENT
+        // ============================================================
+
+        case 'connection_established':
+          print('✅ WebSocket connection confirmed');
+          break;
+
+        // ============================================================
+        // NEARBY DRIVER EVENTS
+        // ============================================================
+
+        case 'driver_status_changed':
+          _handleDriverStatusChanged(data);
+          break;
+
+        case 'driver_location_updated':
+          _handleDriverLocationUpdated(data);
+          break;
+
+        // ============================================================
+        // DEFAULT
+        // ============================================================
+
+        default:
+          print('⚠️ Unhandled passenger WS event: $eventType');
       }
     } catch (e) {
       print('⚠️ Error parsing passenger WebSocket message: $e');
@@ -303,61 +362,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
             userName: widget.userName,
             userEmail: widget.userEmail,
             userRole: widget.userRole,
+            passengerSocket: _passengerSocket,
+            socketSubscription: _socketSubscription,
           ),
         ),
       );
-    }
-  }
-
-  // ============================================================
-  // 🔌 Connect to nearby drivers WebSocket for real-time updates
-  // ============================================================
-  void _connectNearbyDriversSocket() {
-    try {
-      final uri = Uri.parse(
-        'ws://127.0.0.1:8000/ws/passenger/nearby-drivers/?sessionid=&csrftoken=',
-      );
-
-      _nearbyDriversSocket = createPlatformWebSocket(uri);
-
-      _nearbyDriversSubscription = _nearbyDriversSocket!.stream.listen(
-        (message) {
-          if (!mounted) return;
-          _handleNearbyDriversMessage(message);
-        },
-        onError: (error) {
-          print('⚠️ Nearby drivers WebSocket error: $error');
-        },
-        onDone: () {
-          print('🔌 Nearby drivers WebSocket connection closed');
-        },
-      );
-
-      print('✅ Nearby drivers WebSocket connected');
-    } catch (e) {
-      print('❌ Failed to connect nearby drivers WebSocket: $e');
-    }
-  }
-
-  // ============================================================
-  // 📨 Handle nearby drivers WebSocket messages
-  // ============================================================
-  void _handleNearbyDriversMessage(dynamic message) {
-    try {
-      final data = jsonDecode(message);
-      final eventType = data['type'];
-
-      print('📩 Nearby drivers WS event: $eventType');
-
-      if (eventType == 'driver_status_changed') {
-        _handleDriverStatusChanged(data);
-      } else if (eventType == 'driver_location_updated') {
-        _handleDriverLocationUpdated(data);
-      } else if (eventType == 'connection_established') {
-        print('✅ Nearby drivers WebSocket connection confirmed');
-      }
-    } catch (e) {
-      print('⚠️ Error parsing nearby drivers WebSocket message: $e');
     }
   }
 
@@ -386,7 +395,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             longitude,
           );
 
-          if (distance <= 5000) {
+          if (distance <= 1500) {
             // Within 5km - add to list if not already there
             final existingIndex = _nearbyDrivers.indexWhere(
               (d) => d['driver_id'] == driverId,
@@ -565,8 +574,25 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _dropController.clear();
         _passengerController.clear();
 
-        // You could navigate to a ride tracking page here
-        // Navigator.push(context, MaterialPageRoute(builder: (_) => RideTrackingPage(rideId: responseData['id'])));
+        // Navigate to loading screen with shared socket
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => RideLoadingScreen(
+                accessToken: widget.accessToken!,
+                userName: widget.userName,
+                userEmail: widget.userEmail,
+                userRole: widget.userRole,
+                jwtToken: widget.jwtToken,
+                sessionId: widget.sessionId,
+                csrfToken: widget.csrfToken,
+                passengerSocket: _passengerSocket,
+                socketSubscription: _socketSubscription,
+              ),
+            ),
+          );
+        }
       } else if (response.statusCode == 400) {
         final errorData = json.decode(response.body);
         _showErrorSnackBar('Error: ${errorData['error'] ?? 'Bad request'}');
