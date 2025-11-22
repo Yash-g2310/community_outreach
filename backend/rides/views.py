@@ -1,10 +1,12 @@
-from rest_framework import status, generics, permissions
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-from django.db.models import Q
-from .models import User, DriverProfile, RideRequest, RideOffer
+from channels.layers import get_channel_layer
+
+from backend.rides.consumers import notify_nearby_passengers_sync
+from .models import DriverProfile, RideRequest
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
     RideRequestCreateSerializer, LocationUpdateSerializer,
@@ -85,7 +87,7 @@ def update_driver_status(request):
             {'error': 'Only drivers can access this endpoint'},
             status=status.HTTP_403_FORBIDDEN
         )
-    
+
     try:
         profile = request.user.driver_profile
     except DriverProfile.DoesNotExist:
@@ -93,7 +95,7 @@ def update_driver_status(request):
             {'error': 'Driver profile not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     if request.method == 'GET':
         return Response({
             'status': profile.status,
@@ -102,22 +104,37 @@ def update_driver_status(request):
             'current_longitude': profile.current_longitude,
             'last_location_update': profile.last_location_update
         })
-    
-    # PUT or PATCH request
+
+    # PUT or PATCH - update driver status
     serializer = DriverStatusSerializer(data=request.data)
     if serializer.is_valid():
         old_status = profile.status
-        profile.status = serializer.validated_data['status']
-        profile.save()
-        
-        # Broadcast status change to all passengers
-        broadcast_driver_status_change(profile, old_status)
-        
+        new_status = serializer.validated_data['status']
+
+        profile.status = new_status
+        profile.save(update_fields=['status'])
+
+        # NEW WEBSOCKET ARCHITECTURE:
+        # Notify nearby passengers only
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+
+        # Send only if driver has valid location
+        if profile.current_latitude and profile.current_longitude:
+            notify_nearby_passengers_sync(
+                channel_layer,
+                driver_id=request.user.id,
+                lat=float(profile.current_latitude),
+                lon=float(profile.current_longitude),
+                event_type="driver_status_changed",
+                extra={"status": new_status}
+            )
+
         return Response({
-            'status': profile.status,
-            'message': f'You are now {profile.status}'
+            'status': new_status,
+            'message': f'You are now {new_status}'
         })
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -140,7 +157,6 @@ def update_driver_location(request):
         )
     
     if request.method == 'GET':
-        # Get current driver location
         return Response({
             'latitude': float(profile.current_latitude) if profile.current_latitude else None,
             'longitude': float(profile.current_longitude) if profile.current_longitude else None,
@@ -159,22 +175,19 @@ def update_driver_location(request):
         profile.current_longitude = serializer.validated_data['longitude']
         profile.last_location_update = timezone.now()
         profile.save()
-        
-        # Broadcast location update to passengers if driver is available
-        # and location changed significantly (for efficiency)
+
+        # NEW ARCHITECTURE:
+        # Notify only NEARBY passengers (not all)
         if profile.status == 'available':
-            if old_lat is None or old_lon is None:
-                # First time setting location, broadcast it
-                broadcast_driver_location_update(profile)
-            else:
-                # Check if location changed by more than ~50 meters
-                distance_moved = calculate_distance(
-                    float(old_lat), float(old_lon),
-                    float(profile.current_latitude), float(profile.current_longitude)
+            if profile.current_latitude and profile.current_longitude:
+                notify_nearby_passengers_sync(
+                    get_channel_layer(),
+                    driver_id=request.user.id,
+                    lat=float(profile.current_latitude),
+                    lon=float(profile.current_longitude),
+                    event_type="driver_location_updated"
                 )
-                if distance_moved > 50:  # 50 meters threshold
-                    broadcast_driver_location_update(profile)
-        
+
         return Response({
             'message': 'Location updated successfully',
             'latitude': float(profile.current_latitude),
