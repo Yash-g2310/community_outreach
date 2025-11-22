@@ -81,6 +81,7 @@ class AppConsumer(AsyncWebsocketConsumer):
             return
 
         # basic attributes
+        self.current_ride_id = None
         self.user_id = getattr(self.user, "id", None)
         self.role = getattr(self.user, "role", None)  # 'driver' or 'user' assumed
 
@@ -104,19 +105,20 @@ class AppConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, close_code):
         # remove from personal group(s)
         try:
-            await self.channel_layer.group_discard(self.user_group, self.channel_name)
-            if getattr(self, "driver_group", None):
+            if hasattr(self, "user_group"):
+                await self.channel_layer.group_discard(self.user_group, self.channel_name)
+            if hasattr(self, "driver_group"):
                 await self.channel_layer.group_discard(self.driver_group, self.channel_name)
             # remove passenger subscription
-            if self.role == "user":
+            if getattr(self, "role", None) == "user" and hasattr(self, "user_id"):
                 ACTIVE_PASSENGERS.pop(self.user_id, None)
-            # leave ride groups
-            for rg in list(self.joined_rides):
-                await self.channel_layer.group_discard(rg, self.channel_name)
+            if hasattr(self, "joined_rides"):
+                for rg in list(self.joined_rides):
+                    await self.channel_layer.group_discard(rg, self.channel_name)
         except Exception:
             logger.exception("Error during disconnect for user %s", self.user_id)
 
-    # ----------------- incoming messages from client -----------------
+    # ----------------- incoming messages from client to server-----------------
     async def receive(self, text_data=None, bytes_data=None):
         # expect JSON text
         try:
@@ -170,7 +172,19 @@ class AppConsumer(AsyncWebsocketConsumer):
             # notify nearby passengers (async helper)
             from channels.layers import get_channel_layer
             ch = get_channel_layer()
-            await notify_nearby_passengers_async(ch, self.user_id, float(lat), float(lon), event_type="driver_location_updated")
+            if self.current_ride_id:
+                # Send location ONLY to the ride group
+                await self.channel_layer.group_send(
+                    f"ride_{self.current_ride_id}",
+                    {
+                        "type": "driver_location_updated",
+                        "driver_id": self.user_id,
+                        "latitude": float(lat),
+                        "longitude": float(lon),
+                    }
+                )
+            else:       # Still searching for passengers → nearby broadcast
+                await notify_nearby_passengers_async(ch, self.user_id, float(lat), float(lon), event_type="driver_location_updated")
 
             return
 
@@ -232,12 +246,51 @@ class AppConsumer(AsyncWebsocketConsumer):
         # driver accepting/rejecting offers might be handled by HTTP endpoints.
         # Still, support optional messages:
         if msg_type == "accept_offer" and self.role == "driver":
-            # server-side offer handling should update DB and notify passenger
             ride_id = data.get("ride_id")
-            offer_id = data.get("offer_id")
-            # notify server-side via DB or call service (not implemented here)
-            await self.send_json({"type": "offer_accepted", "ride_id": ride_id, "offer_id": offer_id})
+            if ride_id is None:
+                await self.send_json({"type": "error", "message": "ride_id required"})
+                return
+
+            # 1. Update DB (mark accepted)
+            await self._accept_ride_in_db(ride_id, self.user_id)
+
+            # 2. Get passenger id and ride data
+            ride_data = await self._get_ride_data(ride_id)
+            passenger_id = ride_data["passenger_id"]
+
+            # 3. Notify passenger
+            await self.channel_layer.group_send(
+                f"passenger_{passenger_id}",
+                {
+                    "type": "ride_accepted",
+                    "ride_id": ride_id,
+                    "driver_id": self.user_id,
+                    "ride_data": ride_data,
+                }
+            )
+
+            # 4. Add driver to ride group
+            await self.channel_layer.group_add(
+                f"ride_{ride_id}",
+                self.channel_name
+            )
+
+            # 5. Add passenger to ride group
+            passenger_channel = await self._get_passenger_channel(passenger_id)
+            if passenger_channel:
+                await self.channel_layer.group_add(
+                    f"ride_{ride_id}",
+                    passenger_channel
+                )
+
+            # 6. Tell driver acceptance sent
+            await self.send_json({
+                "type": "offer_accepted",
+                "ride_id": ride_id,
+            })
+
             return
+
 
         if msg_type == "reject_offer" and self.role == "driver":
             ride_id = data.get("ride_id")
@@ -248,7 +301,7 @@ class AppConsumer(AsyncWebsocketConsumer):
         # default: ignore unsupported message types
         logger.debug("Unhandled WS message type=%s from user=%s", msg_type, self.user_id)
 
-    # ----------------- handlers for group_send events -----------------
+    # ----------------- handlers for group_send events (server to client)-----------------
     # These are invoked by channel_layer.group_send where "type" maps to method name
 
     async def ride_offer(self, event):
@@ -291,6 +344,7 @@ class AppConsumer(AsyncWebsocketConsumer):
         })
 
     async def no_drivers_available(self, event):
+        # passengers receive this when no driver are available within radius
         await self.send_json({
             "type": "no_drivers_available",
             "ride_id": event.get("ride_id"),
@@ -341,6 +395,7 @@ class AppConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("Failed to update driver profile for %s", self.user_id)
             return False
+        
 
     @database_sync_to_async
     def _update_driver_status_db(self, status):
@@ -353,6 +408,7 @@ class AppConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("Failed to update driver status for %s", self.user_id)
             return False
+        
 
     @database_sync_to_async
     def _get_driver_location(self):
@@ -371,3 +427,34 @@ class AppConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps(content))
         except Exception:
             logger.exception("Failed to send JSON to user %s", self.user_id)
+
+
+    @database_sync_to_async
+    def _accept_ride_in_db(self, ride_id, driver_id):
+        from .models import RideRequest
+        from django.utils import timezone
+
+        ride = RideRequest.objects.get(id=ride_id)
+        ride.status = "accepted"
+        ride.driver = driver_id
+        ride.accepted_at = timezone.now()
+        ride.save(update_fields=["status", "driver", "accepted_at"])
+
+        return ride.passenger
+
+
+    @database_sync_to_async
+    def _get_ride_data(self, ride_id):
+        from .models import RideRequest
+        ride = RideRequest.objects.get(id=ride_id)
+        return {
+            "id": ride_id,
+            "pickup_latitude": float(ride.pickup_latitude),
+            "pickup_longitude": float(ride.pickup_longitude),
+            "pickup_address": ride.pickup_address,
+            "dropoff_address": ride.dropoff_address,
+            "number_of_passengers": ride.number_of_passengers,
+            "status": ride.status,
+            "passenger_id": ride.passenger,
+            "driver_id": ride.driver,
+        }

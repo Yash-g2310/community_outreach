@@ -123,36 +123,3 @@ class RefreshTokenView(APIView):
                 {'error': 'Invalid refresh token'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
-
-#TODO: Remove this as its only for Chrome Based Testing, no need for Mobile App
-class SessionBootstrapView(APIView):
-    """Ensure a Django session + CSRF token exists for JWT-authenticated clients."""
-
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (JWTAuthentication,)
-
-    def post(self, request):
-        user = request.user
-
-        # django_login expects the backend attribute when authenticating via JWT
-        if not hasattr(user, 'backend'):
-            user.backend = 'django.contrib.auth.backends.ModelBackend'
-
-        django_login(request, user)
-
-        session_key = request.session.session_key
-        csrf_token = get_token(request)
-
-        response = Response(
-            {
-                'message': 'Session ready',
-                'sessionid': session_key,
-                'csrftoken': csrf_token,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-        # Provide cookies for browser clients, but Flutter can use JSON payload directly
-        response.set_cookie('sessionid', session_key, httponly=True, samesite='Lax')
-        response.set_cookie('csrftoken', csrf_token, samesite='Lax')
-        return response

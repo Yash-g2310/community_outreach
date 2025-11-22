@@ -108,7 +108,7 @@ class RideOffer(models.Model):
     ride = models.ForeignKey(RideRequest, on_delete=models.CASCADE, related_name='offers')
     driver = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'driver'})
     order = models.PositiveIntegerField()  # 0 = closest driver
-    status = models.CharField(
+    status = models.CharField(             # status = Ki driver ka kya response raha us request ke regarding jab usko mili
         max_length=20,
         choices=[('pending', 'Pending'), ('accepted', 'Accepted'), ('rejected', 'Rejected'), ('expired', 'Expired')],
         default='pending',
