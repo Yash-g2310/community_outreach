@@ -1,3 +1,7 @@
+"""Defines how Django REST API will convert model objects to JSON and validate incoming JSON.
+   Basically define the structure of API requests and responses here.
+"""
+
 from rest_framework import serializers
 from .models import User, DriverProfile, RideRequest
 

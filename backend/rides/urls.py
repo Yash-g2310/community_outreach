@@ -4,6 +4,8 @@ from . import views
 app_name = 'rides'
 
 urlpatterns = [
+    # views.py contains all the actual API endpoints implementations
+
     # User Profile
     path('user/profile/', views.user_profile, name='user-profile'),
     

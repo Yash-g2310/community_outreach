@@ -44,7 +44,7 @@ class DriverProfile(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='offline')
     current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    last_location_update = models.DateTimeField(null=True, blank=True)
+    last_location_update = models.DateTimeField(auto_now=True)
     
     class Meta:
         db_table = 'driver_profiles'
@@ -103,6 +103,8 @@ class RideRequest(models.Model):
     
 
 class RideOffer(models.Model):
+    """Helps in tracking which drivers were offered a ride request to Implement Daisy Chaining"""
+
     ride = models.ForeignKey(RideRequest, on_delete=models.CASCADE, related_name='offers')
     driver = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'driver'})
     order = models.PositiveIntegerField()  # 0 = closest driver

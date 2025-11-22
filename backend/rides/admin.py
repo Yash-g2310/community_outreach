@@ -1,3 +1,5 @@
+"""Tells what to show in the Django admin interface for rides app"""
+
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import User, DriverProfile, RideRequest, RideOffer

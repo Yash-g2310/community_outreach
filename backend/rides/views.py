@@ -20,6 +20,7 @@ from .notifications import (
 )
 from .utils import calculate_distance
 
+
 @api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def user_profile(request):
@@ -37,6 +38,7 @@ def user_profile(request):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
 
 @api_view(['POST', 'GET'])
 @permission_classes([IsAuthenticated])
@@ -166,13 +168,12 @@ def update_driver_location(request):
                 # First time setting location, broadcast it
                 broadcast_driver_location_update(profile)
             else:
-                # Check if location changed by more than ~100 meters
-                from .utils import calculate_distance
+                # Check if location changed by more than ~50 meters
                 distance_moved = calculate_distance(
                     float(old_lat), float(old_lon),
                     float(profile.current_latitude), float(profile.current_longitude)
                 )
-                if distance_moved > 100:  # 100 meters threshold
+                if distance_moved > 50:  # 50 meters threshold
                     broadcast_driver_location_update(profile)
         
         return Response({
@@ -206,8 +207,8 @@ def nearby_drivers_for_passenger(request):
     passenger_lat = serializer.validated_data['latitude']
     passenger_lon = serializer.validated_data['longitude']
     
-    # Default search radius: 5km
-    search_radius = request.data.get('radius', 5000)
+    # Default search radius: 1km
+    search_radius = request.data.get('radius', 1000)
     
     # Get all available drivers with location
     available_drivers = DriverProfile.objects.filter(
@@ -272,6 +273,8 @@ def create_ride_request(request):
     serializer = RideRequestCreateSerializer(data=request.data)
     if serializer.is_valid():
         ride = serializer.save(passenger=request.user)
+
+        # Daisy Chaining: Select possible drivers & send notifications sequentially
         offers = build_offers_for_ride(ride)
         if offers:
             dispatch_next_offer(ride)
@@ -281,8 +284,7 @@ def create_ride_request(request):
             if driver_candidates
             else 'No available drivers found nearby yet. We will keep searching.'
         )
-        
-        # ✅ No WebSocket - Drivers will discover via polling
+
         response_serializer = RideRequestSerializer(ride)
         return Response({
             **response_serializer.data,

@@ -19,7 +19,7 @@ urlpatterns = [
     path('api/auth/bootstrap-session/', SessionBootstrapView.as_view(), name='bootstrap-session'),
     
     # Rides endpoints (at /api/rides/)
-    path('api/rides/', include('rides.urls')),
+    path('api/rides/', include('rides.urls')),      # rides.urls have all the actual ride-related endpoints
 ]
 
 # Serve media files in development

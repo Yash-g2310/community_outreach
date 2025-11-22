@@ -1,3 +1,5 @@
+"""Contains the helper functions that send notifications to drivers and passengers."""
+
 from __future__ import annotations
 
 from asgiref.sync import async_to_sync
@@ -10,7 +12,17 @@ from .utils import calculate_distance
 
 
 def build_offers_for_ride(ride: RideRequest) -> list[RideOffer]:
-    """Populate the RideOffer queue for the provided ride based on distance."""
+    """
+    Build the ordered RideOffer list (queue) for one ride.
+
+    Used right before sending WS ride_offer events:
+        await channel_layer.group_send(
+            f"driver_{driver_id}",
+            {"type": "ride_offer", "ride_data": ..., "offer_id": offer.id}
+        )
+    """
+
+    # 1. Fetch currently available drivers with stored live location
     available_drivers = (
         DriverProfile.objects.select_related("user")
         .filter(
@@ -20,22 +32,26 @@ def build_offers_for_ride(ride: RideRequest) -> list[RideOffer]:
         )
     )
 
+    # 2. Compute distance from ride pickup for each driver
     candidates: list[tuple[DriverProfile, float]] = []
     for profile in available_drivers:
         distance = calculate_distance(
-            ride.pickup_latitude,
-            ride.pickup_longitude,
-            profile.current_latitude,
-            profile.current_longitude,
+            float(ride.pickup_latitude),
+            float(ride.pickup_longitude),
+            float(profile.current_latitude),
+            float(profile.current_longitude),
         )
-        if distance <= ride.broadcast_radius:
+        # Only keep drivers inside broadcast radius
+        if distance <= float(ride.broadcast_radius):
             candidates.append((profile, distance))
 
+    # 3. Sort closest → farthest
     candidates.sort(key=lambda item: item[1])
 
-    # Reset previous offers before inserting the latest ordering
+    # 4. Clear old offers to avoid stale/outdated queue
     ride.offers.all().delete()
 
+    # 5. Insert updated queue (ordered RideOffer rows)
     offers: list[RideOffer] = []
     for order, (profile, _) in enumerate(candidates):
         offer = RideOffer.objects.create(
@@ -50,38 +66,55 @@ def build_offers_for_ride(ride: RideRequest) -> list[RideOffer]:
 
 
 def dispatch_next_offer(ride: RideRequest) -> bool:
-    """Send the next pending ride offer to its targeted driver via WebSocket."""
+    """
+    Send the next pending ride offer to the specific driver using:
+        driver_<driver_id>
+    This matches the unified AppConsumer (ride_offer handler).
+    """
+
+    # 1. Get next unsent pending offer (ordered queue)
     offer = (
-        ride.offers.filter(status="pending", sent_at__isnull=True)
+        ride.offers
+        .filter(status="pending", sent_at__isnull=True)
         .order_by("order")
         .select_related("driver")
         .first()
     )
     if not offer:
-        return False
+        return False   # No pending offers left
 
+    # 2. Download channel layer
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return False
 
+    # 3. Mark offer as "sent"
     offer.sent_at = timezone.now()
     offer.save(update_fields=["sent_at"])
 
+    # 4. Serialize ride data
     payload = RideRequestSerializer(ride).data
+
+    # 5. Send to the driver's personal group
     async_to_sync(channel_layer.group_send)(
-        "available_drivers",
+        f"driver_{offer.driver_id}",
         {
-            "type": "new_ride_request",
+            "type": "ride_offer",      # triggers ride_offer() handler in AppConsumer
             "ride_data": payload,
-            "driver_id": offer.driver_id,
-        },
+            "offer_id": offer.id,
+        }
     )
 
     return True
 
 
 def expire_offer_and_dispatch(offer: RideOffer) -> bool:
-    """Mark an offer as expired and attempt to notify the next driver."""
+    """
+    Mark this offer as expired, notify the driver, then dispatch the next offer.
+    If no offers remain, notify the passenger that no drivers are available.
+    """
+
+    # 1. Only pending offers can expire
     if offer.status != "pending":
         return False
 
@@ -89,29 +122,56 @@ def expire_offer_and_dispatch(offer: RideOffer) -> bool:
     offer.responded_at = timezone.now()
     offer.save(update_fields=["status", "responded_at"])
 
-    # Notify the driver whose offer just expired
-    notify_driver_event(
-        "ride_expired",
-        offer.ride,
-        offer.driver_id,
-        "Your ride offer has timed out.",
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return False
+
+    # 2. Notify THIS driver that their offer expired
+    async_to_sync(channel_layer.group_send)(
+        f"driver_{offer.driver_id}",
+        {
+            "type": "ride_expired",         # -> AppConsumer.ride_expired()
+            "ride_id": offer.ride_id,
+            "message": "Your ride offer has timed out.",
+        }
     )
 
+    # 3. Attempt to send the next pending offer
     dispatched = dispatch_next_offer(offer.ride)
-    if not dispatched and not offer.ride.offers.filter(status="pending").exists():
+
+    # 4. If no pending offers left AND dispatch failed → notify passenger
+    has_pending = offer.ride.offers.filter(status="pending").exists()
+
+    if not dispatched and not has_pending:
+        # Update ride status
         offer.ride.status = "no_drivers"
         offer.ride.save(update_fields=["status"])
-        # Notify passenger that no drivers are available
-        notify_passenger_event(
-            "no_drivers_available",
-            offer.ride,
-            "No drivers accepted your ride request. Please try again later.",
+
+        # Notify passenger
+        async_to_sync(channel_layer.group_send)(
+            f"user_{offer.ride.passenger_id}",
+            {
+                "type": "no_drivers_available",   # -> AppConsumer.no_drivers_available()
+                "ride_id": offer.ride_id,
+                "message": "No drivers accepted your ride request. Please try again later.",
+            }
         )
 
     return dispatched
 
 
 def notify_driver_event(event_type: str, ride: RideRequest, driver_id: int | None, message: str = "") -> bool:
+    """
+    Send an event to a specific driver using their personal group:
+        driver_<driver_id>
+
+    event_type should match one of AppConsumer's server-event handlers, like:
+        - ride_offer
+        - ride_expired
+        - ride_cancelled
+        - ride_accepted
+    """
+
     if not driver_id:
         return False
 
@@ -120,21 +180,38 @@ def notify_driver_event(event_type: str, ride: RideRequest, driver_id: int | Non
         return False
 
     payload = {
-        "type": event_type,
+        "type": event_type,            # maps to AppConsumer.<event_type>()
         "ride_id": ride.id,
         "driver_id": driver_id,
+        "ride_data": RideRequestSerializer(ride).data
     }
+
     if message:
         payload["message"] = message
-    payload["ride_data"] = RideRequestSerializer(ride).data
 
-    async_to_sync(channel_layer.group_send)("available_drivers", payload)
+    # Send directly to this driver
+    async_to_sync(channel_layer.group_send)(
+        f"driver_{driver_id}",
+        payload
+    )
+
     return True
 
 
 def notify_passenger_event(event_type: str, ride: RideRequest, message: str = "") -> bool:
-    """Send a WebSocket event to a specific passenger about their ride status."""
-    if not ride.passenger_id:
+    """
+    Send ride-related event to the passenger through:
+        user_<passenger_id>
+
+    event_type must match AppConsumer's server-event handler, like:
+        - no_drivers_available
+        - ride_accepted
+        - ride_cancelled
+        - ride_expired
+    """
+
+    passenger_id = ride.passenger_id
+    if not passenger_id:
         return False
 
     channel_layer = get_channel_layer()
@@ -142,86 +219,18 @@ def notify_passenger_event(event_type: str, ride: RideRequest, message: str = ""
         return False
 
     payload = {
-        "type": event_type,
+        "type": event_type,              # calls AppConsumer.<event_type>()
         "ride_id": ride.id,
         "status": ride.status,
+        "ride_data": RideRequestSerializer(ride).data
     }
+
     if message:
         payload["message"] = message
-    payload["ride_data"] = RideRequestSerializer(ride).data
 
-    # Send to passenger-specific group
     async_to_sync(channel_layer.group_send)(
-        f"passenger_{ride.passenger_id}",
+        f"user_{passenger_id}",          # unified group name
         payload
     )
-    return True
 
-
-def broadcast_driver_status_change(driver_profile: DriverProfile, old_status: str = None) -> bool:
-    """
-    Broadcast driver status change to all passengers listening for nearby drivers updates.
-    
-    Args:
-        driver_profile: The DriverProfile that changed status
-        old_status: The previous status (optional, for logging/debugging)
-    
-    Returns:
-        True if broadcast succeeded, False otherwise
-    """
-    channel_layer = get_channel_layer()
-    if channel_layer is None:
-        return False
-
-    payload = {
-        "type": "driver_status_changed",
-        "driver_id": driver_profile.id,
-        "status": driver_profile.status,
-        "latitude": float(driver_profile.current_latitude) if driver_profile.current_latitude else None,
-        "longitude": float(driver_profile.current_longitude) if driver_profile.current_longitude else None,
-        "message": f"Driver {driver_profile.user.username} is now {driver_profile.status}"
-    }
-
-    # Broadcast to all passengers
-    async_to_sync(channel_layer.group_send)(
-        "all_passengers",
-        payload
-    )
-    return True
-
-
-def broadcast_driver_location_update(driver_profile: DriverProfile) -> bool:
-    """
-    Broadcast significant driver location changes to passengers.
-    Only broadcasts for available drivers with valid location.
-    
-    Args:
-        driver_profile: The DriverProfile with updated location
-    
-    Returns:
-        True if broadcast succeeded, False otherwise
-    """
-    channel_layer = get_channel_layer()
-    if channel_layer is None:
-        return False
-
-    # Only broadcast for available drivers
-    if driver_profile.status != 'available':
-        return False
-    
-    if not driver_profile.current_latitude or not driver_profile.current_longitude:
-        return False
-
-    payload = {
-        "type": "driver_location_updated",
-        "driver_id": driver_profile.id,
-        "latitude": float(driver_profile.current_latitude),
-        "longitude": float(driver_profile.current_longitude)
-    }
-
-    # Broadcast to all passengers
-    async_to_sync(channel_layer.group_send)(
-        "all_passengers",
-        payload
-    )
     return True

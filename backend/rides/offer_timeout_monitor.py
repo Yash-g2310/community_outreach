@@ -1,3 +1,5 @@
+"""It runs a background thread that keeps checking for ride offers that have timed out"""
+
 import logging
 import os
 import threading

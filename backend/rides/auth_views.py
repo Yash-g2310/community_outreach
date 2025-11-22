@@ -124,7 +124,7 @@ class RefreshTokenView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-
+#TODO: Remove this as its only for Chrome Based Testing, no need for Mobile App
 class SessionBootstrapView(APIView):
     """Ensure a Django session + CSRF token exists for JWT-authenticated clients."""
 

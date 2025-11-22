@@ -1,3 +1,5 @@
+"""Stores the Configuration for the Sequential Ride Offer Timeout Monitor"""
+
 from django.apps import AppConfig
 
 
