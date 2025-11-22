@@ -64,7 +64,7 @@ class AppConsumer(AsyncWebsocketConsumer):
     Incoming messages (examples):
      - {"type":"ping"}
      - {"type":"subscribe_nearby","latitude":12.97,"longitude":77.59,"radius":1000}   # passenger
-     - {"type":"unsubscribe_nearby"}  # passenger
+     - {"type":"unsubscribe_nearby"}                                                  # passenger
      - {"type":"driver_location_update","latitude":12.97,"longitude":77.59}           # driver
      - {"type":"driver_status_update","status":"available"}                           # driver
      - {"type":"start_tracking","ride_id":123}                                        # join ride group (driver/passenger)
