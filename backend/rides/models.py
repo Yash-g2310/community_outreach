@@ -44,7 +44,7 @@ class DriverProfile(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='offline')
     current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    last_location_update = models.DateTimeField(auto_now=True)
+    last_location_update = models.DateTimeField(default=timezone.now)
     
     class Meta:
         db_table = 'driver_profiles'
