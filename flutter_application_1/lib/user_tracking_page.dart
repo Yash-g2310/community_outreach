@@ -100,14 +100,16 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           double? lng;
           final latRaw = data['latitude'];
           final lngRaw = data['longitude'];
-          if (latRaw is num)
+          if (latRaw is num) {
             lat = latRaw.toDouble();
-          else
+          } else {
             lat = double.tryParse('$latRaw');
-          if (lngRaw is num)
+          }
+          if (lngRaw is num) {
             lng = lngRaw.toDouble();
-          else
+          } else {
             lng = double.tryParse('$lngRaw');
+          }
 
           if (lat != null && lng != null) {
             setState(() {
