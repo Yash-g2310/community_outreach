@@ -6,6 +6,7 @@ Thumbs.db
 *.log
 *.tmp
 *.swp
+.idea
 
 # Editor / IDE
 .idea/

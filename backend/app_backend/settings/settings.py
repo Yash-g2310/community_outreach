@@ -16,16 +16,10 @@ from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
 
 # SECURITY WARNING: keep the secret key used in production secret!
-load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
 SECRET_KEY = os.getenv('SECRET_KEY')
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ["*"]
-
 
 # Application definition
 
@@ -161,15 +155,6 @@ REST_FRAMEWORK = {
     ],
 }
 
-# CORS Settings (allow Flutter app to make requests)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # Web
-    "http://10.0.2.2:8000",   # Android emulator
-]
-
-# For development, you can allow all origins
-CORS_ALLOW_ALL_ORIGINS = True
-
 # Allow credentials for CORS
 CORS_ALLOW_CREDENTIALS = True
 
@@ -180,12 +165,6 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': False,
     'UPDATE_LAST_LOGIN': True,
-}
-
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
-    }
 }
 
 RIDE_OFFER_TIMEOUT_SECONDS = 20  # Updated to match Celery timeout
