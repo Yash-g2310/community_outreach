@@ -73,13 +73,7 @@ class _DriverPageState extends State<DriverPage> {
   Timer? _socketReconnectTimer;
   bool _shouldMaintainSocket = true;
   bool _socketTransferred = false;
-  bool _isSocketConnected = false;
-  String? _socketStatusMessage;
   int _socketReconnectAttempts = 0;
-  int _socketFailureCount = 0;
-  DateTime? _lastSocketMessageAt;
-  DateTime? _lastRideReceivedAt;
-  String? _lastSocketError;
 
   @override
   void initState() {
@@ -176,15 +170,6 @@ class _DriverPageState extends State<DriverPage> {
 
   void _logSocket(String message) => _logDriver(message, tag: 'DriverSocket');
 
-  String _formatTimestamp(DateTime? timestamp) {
-    if (timestamp == null) return 'never';
-    final local = timestamp.toLocal();
-    final hh = local.hour.toString().padLeft(2, '0');
-    final mm = local.minute.toString().padLeft(2, '0');
-    final ss = local.second.toString().padLeft(2, '0');
-    return '$hh:$mm:$ss';
-  }
-
   bool get _canUseDriverSocket =>
       (widget.jwtToken?.isNotEmpty ?? false) ||
       (widget.sessionId?.isNotEmpty ?? false);
@@ -226,13 +211,10 @@ class _DriverPageState extends State<DriverPage> {
 
   void _initializeDriverSocket() {
     if (!_canUseDriverSocket) {
-      _socketStatusMessage =
-          'Realtime updates unavailable (missing session cookie)';
       _logSocket('Skipping WS init - missing session cookie');
       return;
     }
 
-    _socketStatusMessage = 'Connecting to live ride updates...';
     _logSocket('Initializing driver WebSocket connection');
     _connectDriverSocket();
   }
@@ -272,15 +254,9 @@ class _DriverPageState extends State<DriverPage> {
       _driverSocket = channel;
 
       _safeSetState(() {
-        _isSocketConnected = true;
-        _socketStatusMessage = isReconnect
-            ? 'Reconnected to live ride updates'
-            : 'Connected to live ride updates';
         _socketReconnectAttempts = 0;
-        _lastSocketError = null;
       });
-      _socketFailureCount = 0;
-      _lastSocketMessageAt = DateTime.now();
+      // reset failure counter (not tracked in UI)
       _logSocket('WebSocket connection opened (reconnect=$isReconnect)');
     } catch (error) {
       _handleSocketError(error);
@@ -292,9 +268,6 @@ class _DriverPageState extends State<DriverPage> {
       final rawPayload = message is String ? message : message.toString();
       final data = json.decode(rawPayload) as Map<String, dynamic>;
       final eventType = data['type'] as String?;
-      _lastSocketMessageAt = DateTime.now();
-      _socketStatusMessage = 'Listening for ride updates';
-      _lastSocketError = null;
       _logSocket('Message <- ${eventType ?? 'unknown'}');
 
       if (eventType == null) {
@@ -303,9 +276,9 @@ class _DriverPageState extends State<DriverPage> {
 
       switch (eventType) {
         case 'connection_established':
-          _safeSetState(() {
-            _socketStatusMessage = data['message'] ?? 'Connected';
-          });
+          _logSocket(
+            'Connection established: ${data['message'] ?? 'Connected'}',
+          );
           break;
         case 'new_ride_request':
           final rideData = data['ride'];
@@ -416,7 +389,6 @@ class _DriverPageState extends State<DriverPage> {
     }
 
     final mappedRide = _rideToNotification(ridePayload);
-    _lastRideReceivedAt = DateTime.now();
     _logSocket(
       'Ride $rideId pushed to notifications (total=${notifications.length + 1})',
     );
@@ -467,14 +439,9 @@ class _DriverPageState extends State<DriverPage> {
     _driverSocketSubscription?.cancel();
     _driverSocketSubscription = null;
     _driverSocket = null;
-    _socketFailureCount += 1;
-    _lastSocketError = '$error';
+    // increment failure counter (not tracked in UI)
 
-    _safeSetState(() {
-      _isSocketConnected = false;
-      _socketStatusMessage =
-          'Realtime connection lost - retrying (fail=$_socketFailureCount)';
-    });
+    _safeSetState(() {});
 
     _scheduleSocketReconnect();
   }
@@ -485,10 +452,7 @@ class _DriverPageState extends State<DriverPage> {
     _driverSocketSubscription = null;
     _driverSocket = null;
 
-    _safeSetState(() {
-      _isSocketConnected = false;
-      _socketStatusMessage = 'Realtime connection closed';
-    });
+    _safeSetState(() {});
 
     _scheduleSocketReconnect();
   }
@@ -508,14 +472,6 @@ class _DriverPageState extends State<DriverPage> {
       if (!_shouldMaintainSocket) return;
       _connectDriverSocket(isReconnect: true);
     });
-  }
-
-  void _manualSocketReconnect() {
-    if (!_canUseDriverSocket) return;
-    _socketReconnectTimer?.cancel();
-    _cancelDriverSocket();
-    _logSocket('Manual reconnect triggered by driver');
-    _connectDriverSocket(isReconnect: true);
   }
 
   void _cancelDriverSocket() {
