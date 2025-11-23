@@ -35,8 +35,6 @@ class _LoginScreenState extends State<LoginScreen> {
   static const bool _enableLoginDebugLogs = true;
 
   static const String _loginEndpoint = 'http://localhost:8000/api/auth/login/';
-  static const String _sessionBootstrapEndpoint =
-      'http://localhost:8000/api/auth/bootstrap-session/';
 
   // Text controllers for login form
   final TextEditingController _usernameController = TextEditingController();
@@ -130,40 +128,11 @@ class _LoginScreenState extends State<LoginScreen> {
           throw Exception('Login response missing access token');
         }
 
-        final rawCookieHeader = response.headers['set-cookie'];
-        String? sessionId = _extractCookieValue(rawCookieHeader, 'sessionid');
-        String? csrfToken = _extractCookieValue(rawCookieHeader, 'csrftoken');
-
-        if (sessionId == null || csrfToken == null) {
-          _logLogin(
-            '($requestId) Session cookies missing from login response; invoking bootstrap endpoint',
-            tag: 'SESSION',
-          );
-          final bootstrapData = await _bootstrapSession(accessToken);
-          sessionId ??= bootstrapData['sessionid'];
-          csrfToken ??= bootstrapData['csrftoken'];
-        }
-
-        if (sessionId == null) {
-          throw Exception(
-            'Unable to establish session for realtime updates. Please retry login.',
-          );
-        }
-        if (csrfToken == null) {
-          _logLogin(
-            '($requestId) WARNING :: CSRF token missing even after bootstrap; PATCH/POST endpoints may fail',
-            tag: 'LOGIN_COOKIE',
-          );
-        }
-
-        final String confirmedSessionId = sessionId;
-        final String? confirmedCsrfToken = csrfToken;
-
         final tokenPreview = accessToken.length > 16
             ? '${accessToken.substring(0, 16)}...'
             : accessToken;
         _logLogin(
-          '($requestId) LOGIN SUCCESS :: role=$userRole user=$userName email=$userEmail accessPreview=$tokenPreview session=${confirmedSessionId.isNotEmpty} csrf=${confirmedCsrfToken != null}',
+          '($requestId) LOGIN SUCCESS :: role=$userRole user=$userName email=$userEmail accessPreview=$tokenPreview',
         );
 
         // Show success message
@@ -181,11 +150,7 @@ class _LoginScreenState extends State<LoginScreen> {
             userName: userName,
             userEmail: userEmail,
             accessToken: accessToken,
-            extraContext: {
-              'sessionId': confirmedSessionId,
-              'csrfToken': confirmedCsrfToken,
-              'refreshToken': refreshToken,
-            },
+            extraContext: {'refreshToken': refreshToken},
             rawUserData: Map<String, dynamic>.from(userData ?? {}),
           );
         }
@@ -215,38 +180,6 @@ class _LoginScreenState extends State<LoginScreen> {
         throw Exception(error.toString().replaceAll('Exception: ', ''));
       }
     }
-  }
-
-  // TODO: Remove this function later as it's only for Chrome Based Testing
-  Future<Map<String, String?>> _bootstrapSession(String accessToken) async {
-    try {
-      final response = await http.post(
-        Uri.parse(_sessionBootstrapEndpoint),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $accessToken',
-        },
-      );
-
-      _logLogin(
-        'SESSION BOOTSTRAP :: status=${response.statusCode}',
-        tag: 'SESSION',
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return {
-          'sessionid': data['sessionid']?.toString(),
-          'csrftoken': data['csrftoken']?.toString(),
-        };
-      } else {
-        _logLogin('Bootstrap failed body=${response.body}', tag: 'SESSION');
-      }
-    } catch (error, stackTrace) {
-      _logLogin('Bootstrap error: $error', tag: 'SESSION_ERROR');
-      _logLogin(stackTrace.toString(), tag: 'SESSION_STACK');
-    }
-
-    return {};
   }
 
   // Navigate to signup page
@@ -290,11 +223,17 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } else {
       destinationPage = UserMapScreen(
-        userName: userName,
-        userEmail: userEmail ?? '',
-        userRole: role,
-        accessToken: accessToken,
-      ); // Navigate to user home page with user data
+        jwtToken: accessToken,
+        sessionId: extraContext?['sessionId'] as String?,
+        csrfToken: extraContext?['csrfToken'] as String?,
+        refreshToken: extraContext?['refreshToken'] as String?,
+        userData: {
+          'username': userName,
+          'email': userEmail,
+          'role': role,
+          if (rawUserData != null) ...rawUserData,
+        },
+      );
     }
 
     // Replace current screen (so user can't go back to login)
@@ -302,13 +241,6 @@ class _LoginScreenState extends State<LoginScreen> {
       context,
       MaterialPageRoute(builder: (context) => destinationPage),
     );
-  }
-
-  String? _extractCookieValue(String? headerValue, String cookieName) {
-    if (headerValue == null) return null;
-    final regex = RegExp('${RegExp.escape(cookieName)}=([^;]+)');
-    final match = regex.firstMatch(headerValue);
-    return match?.group(1);
   }
 
   @override

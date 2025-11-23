@@ -14,56 +14,38 @@ import 'package:flutter_application_1/user_tracking_page.dart';
 import 'package:flutter_application_1/loading_page2.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const UserApp());
+  runApp(const ERickUserApp());
 }
 
-class UserApp extends StatelessWidget {
-  const UserApp({super.key});
+class ERickUserApp extends StatelessWidget {
+  final String? jwtToken;
+  final Map<String, dynamic>? userData;
+
+  const ERickUserApp({super.key, this.jwtToken, this.userData});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'E-Rick User App',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
-        useMaterial3: true,
-      ),
-      home:
-          const UserMapScreen(), // Changed to UserMapScreen since that's the main screen
+      home: UserMapScreen(jwtToken: jwtToken, userData: userData),
     );
   }
 }
 
-// Add UserHomePage as an alias or wrapper for UserMapScreen
-class UserHomePage extends StatelessWidget {
-  const UserHomePage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const UserMapScreen();
-  }
-}
-
 class UserMapScreen extends StatefulWidget {
-  final String? userName;
-  final String? userEmail;
-  final String? userRole;
+  final String? jwtToken;
+  final Map<String, dynamic>? userData;
   final String? sessionId;
   final String? csrfToken;
-  final String? jwtToken;
-  final String? accessToken;
+  final String? refreshToken;
 
   const UserMapScreen({
     super.key,
-    this.userName,
-    this.userEmail,
-    this.userRole,
+    this.jwtToken,
     this.sessionId,
     this.csrfToken,
-    this.jwtToken,
-    this.accessToken,
+    this.refreshToken,
+    this.userData,
   });
 
   @override
@@ -73,13 +55,14 @@ class UserMapScreen extends StatefulWidget {
 class _UserMapScreenState extends State<UserMapScreen> {
   LatLng? _currentPosition;
   bool _isLoading = false;
-  bool _isLoadingDrivers = false;
-  List<Map<String, dynamic>> _nearbyDrivers = [];
+  final _isLoadingDrivers = false;
+  final List<Map<String, dynamic>> _nearbyDrivers = [];
   Timer? _driversUpdateTimer;
 
   // WebSocket for ride status updates
   WebSocketChannel? _passengerSocket;
   StreamSubscription? _socketSubscription;
+  bool _socketTransferred = false;
 
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -99,18 +82,16 @@ class _UserMapScreenState extends State<UserMapScreen> {
   void initState() {
     super.initState();
     _loadCurrentLocation();
-
-    // Connect to passenger WebSocket for real-time ride status
-    if (widget.accessToken != null) {
-      _connectPassengerSocket();
-    }
   }
 
   @override
   void dispose() {
     _driversUpdateTimer?.cancel();
     _socketSubscription?.cancel();
-    _passengerSocket?.sink.close();
+    // If we transferred the socket to another page, do not close it here.
+    if (!_socketTransferred) {
+      _passengerSocket?.sink.close();
+    }
     _pickupController.dispose();
     _dropController.dispose();
     _passengerController.dispose();
@@ -143,90 +124,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       print('Current location: ${position.latitude}, ${position.longitude}');
 
-      // Load nearby drivers after getting location
-      _loadNearbyDrivers();
-
-      if (_passengerSocket != null) {
-        _passengerSocket!.sink.add(
-          jsonEncode({
-            "type": "subscribe_nearby",
-            "latitude": position.latitude,
-            "longitude": position.longitude,
-            "radius": 1500,
-          }),
-        );
-        print("📡 Sent subscribe_nearby after location loaded");
+      if (widget.jwtToken != null) {
+        _connectPassengerSocket();
       }
-
-      // Real-time updates via WebSocket (no more polling!)
     } catch (e) {
       debugPrint('Error getting location: $e');
-    }
-  }
-
-  // Fetch nearby drivers from API (initial load only)
-
-  Future<void> _loadNearbyDrivers() async {
-    if (_currentPosition == null || widget.accessToken == null || !mounted) {
-      return;
-    }
-
-    setState(() {
-      _isLoadingDrivers = true;
-    });
-
-    try {
-      final requestData = {
-        'latitude': _truncateCoordinate(_currentPosition!.latitude),
-        'longitude': _truncateCoordinate(_currentPosition!.longitude),
-        'radius': 5000, // 5km radius
-      };
-
-      print('=== LOADING NEARBY DRIVERS (${DateTime.now()}) ===');
-      print('Request data: $requestData');
-      print('==============================');
-
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/passenger/nearby-drivers/'),
-        headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode(requestData),
-      );
-
-      print('Nearby drivers response status: ${response.statusCode}');
-      print('Nearby drivers response body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final responseData = json.decode(response.body);
-        final drivers = List<Map<String, dynamic>>.from(
-          responseData['drivers'] ?? [],
-        );
-
-        if (mounted) {
-          setState(() {
-            _nearbyDrivers = drivers;
-          });
-        }
-
-        print('Found ${drivers.length} nearby drivers at ${DateTime.now()}');
-        for (var driver in drivers) {
-          print(
-            'Driver: ${driver['username']} - ${driver['vehicle_number']} at (${driver['latitude']}, ${driver['longitude']}) - ${driver['distance_meters']}m',
-          );
-        }
-      } else {
-        print('Failed to load nearby drivers: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Error loading nearby drivers: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingDrivers = false;
-        });
-      }
     }
   }
 
@@ -251,6 +153,22 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       _passengerSocket = createPlatformWebSocket(uri);
 
+      print('✅ Passenger WebSocket connected: $uri (user_page)');
+
+      if (_currentPosition != null) {
+        _passengerSocket!.sink.add(
+          jsonEncode({
+            "type": "subscribe_nearby",
+            "latitude": _currentPosition!.latitude,
+            "longitude": _currentPosition!.longitude,
+            "radius": 1500, // or whatever radius you use
+          }),
+        );
+        print("📡 Sent Websocket for Nearby Drivers to backend");
+      } else {
+        print("⚠️ Cannot subscribe_nearby — currentPosition is null");
+      }
+
       _socketSubscription = _passengerSocket!.stream.listen(
         (message) {
           if (!mounted) return;
@@ -263,22 +181,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
           print('🔌 Passenger WebSocket connection closed');
         },
       );
-
-      print('✅ Passenger WebSocket connected: $uri (user_page)');
-
-      if (_currentPosition != null) {
-        _passengerSocket!.sink.add(
-          jsonEncode({
-            "type": "subscribe_nearby",
-            "latitude": _currentPosition!.latitude,
-            "longitude": _currentPosition!.longitude,
-            "radius": 5000, // or whatever radius you use
-          }),
-        );
-        print("📡 Sent subscribe_nearby to backend");
-      } else {
-        print("⚠️ Cannot subscribe_nearby — currentPosition is null");
-      }
     } catch (e) {
       print('❌ Failed to connect passenger WebSocket: $e');
     }
@@ -292,15 +194,42 @@ class _UserMapScreenState extends State<UserMapScreen> {
       final data = jsonDecode(message);
       final eventType = data['type'];
 
-      print('📩 Passenger WS event (user_page): $eventType');
+      print('Passenger WS event on user_page: $eventType');
 
       switch (eventType) {
-        // ============================================================
-        // RIDE-RELATED EVENTS
-        // ============================================================
-
         case 'ride_accepted':
-          _handleRideAccepted(data);
+          // Driver accepted the ride. Transfer socket ownership to the
+          // tracking page so it can subscribe and receive tracking updates.
+          print('✅ Driver accepted ride (user_page) — opening tracking page');
+          // Mark transfer so dispose won't close the shared socket.
+          _socketTransferred = true;
+          try {
+            _socketSubscription?.cancel();
+          } catch (e) {
+            print('Warning cancelling user_page subscription: $e');
+          }
+          _socketSubscription = null;
+
+          // If a loading screen is on top, pop it first so replacement
+          // correctly shows the tracking page. If not, pushReplacement
+          // will replace the current user page.
+          if (Navigator.canPop(context)) {
+            Navigator.pop(context);
+          }
+
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => UserTrackingPage(
+                jwtToken: widget.jwtToken,
+                sessionId: widget.sessionId,
+                csrfToken: widget.csrfToken,
+                refreshToken: widget.refreshToken,
+                userData: widget.userData,
+                passengerSocket: _passengerSocket,
+              ),
+            ),
+          );
           break;
 
         case 'ride_cancelled':
@@ -316,14 +245,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         // ============================================================
-        // CONNECTION EVENT
-        // ============================================================
-
-        case 'connection_established':
-          print('✅ WebSocket connection confirmed');
-          break;
-
-        // ============================================================
         // NEARBY DRIVER EVENTS
         // ============================================================
 
@@ -335,38 +256,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
           _handleDriverLocationUpdated(data);
           break;
 
-        // ============================================================
-        // DEFAULT
-        // ============================================================
-
         default:
           print('⚠️ Unhandled passenger WS event: $eventType');
       }
     } catch (e) {
       print('⚠️ Error parsing passenger WebSocket message: $e');
-    }
-  }
-
-  // ============================================================
-  // ✅ Handle ride accepted by driver
-  // ============================================================
-  void _handleRideAccepted(Map<String, dynamic> data) {
-    print('✅ Driver accepted ride — navigating to tracking page');
-
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => UserTrackingPage(
-            accessToken: widget.accessToken!,
-            userName: widget.userName,
-            userEmail: widget.userEmail,
-            userRole: widget.userRole,
-            passengerSocket: _passengerSocket,
-            socketSubscription: _socketSubscription,
-          ),
-        ),
-      );
     }
   }
 
@@ -396,7 +290,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
           );
 
           if (distance <= 1500) {
-            // Within 5km - add to list if not already there
+            // Within 1.5km - add to list if not already there
             final existingIndex = _nearbyDrivers.indexWhere(
               (d) => d['driver_id'] == driverId,
             );
@@ -504,7 +398,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // Create ride request API call
   Future<void> _createRideRequest() async {
     // Validation
-    if (widget.accessToken == null) {
+    if (widget.jwtToken == null) {
       _showErrorSnackBar('Please login first');
       return;
     }
@@ -556,7 +450,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       final response = await http.post(
         Uri.parse('$baseUrl/api/rides/passenger/request/'),
         headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
+          'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
         },
         body: json.encode(rideData),
@@ -574,21 +468,19 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _dropController.clear();
         _passengerController.clear();
 
-        // Navigate to loading screen with shared socket
         if (mounted) {
+          // Show UI-only loading screen; keep this page's WebSocket
+          // subscription active so it can detect server response events
+          // (e.g. ride_accepted) and perform the transfer at that time.
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => RideLoadingScreen(
-                accessToken: widget.accessToken!,
-                userName: widget.userName,
-                userEmail: widget.userEmail,
-                userRole: widget.userRole,
+              builder: (_) => RideLoadingScreen(
                 jwtToken: widget.jwtToken,
                 sessionId: widget.sessionId,
                 csrfToken: widget.csrfToken,
-                passengerSocket: _passengerSocket,
-                socketSubscription: _socketSubscription,
+                refreshToken: widget.refreshToken,
+                userData: widget.userData,
               ),
             ),
           );
@@ -671,7 +563,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('E-Rickshaw User Page'),
+        title: const Text('Passenger Page'),
         leading: IconButton(
           onPressed: () {
             _showLogoutDialog(context);
@@ -693,15 +585,17 @@ class _UserMapScreenState extends State<UserMapScreen> {
                   context,
                   MaterialPageRoute(
                     builder: (context) => ProfilePage(
-                      userType: widget.userRole?.capitalize() ?? 'User',
-                      userName: widget.userName ?? 'E-Rick User',
-                      userEmail: widget.userEmail ?? 'user@erick.com',
-                      accessToken: widget.accessToken,
+                      userType:
+                          widget.userData?['role']?.toString().capitalize() ??
+                          'User',
+                      userName: widget.userData?['username'] ?? 'E-Rick User',
+                      userEmail: widget.userData?['email'] ?? 'user@erick.com',
+                      accessToken: widget.jwtToken,
                     ),
                   ),
                 );
               } else if (value == 'rides') {
-                if (widget.accessToken == null || widget.accessToken!.isEmpty) {
+                if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
@@ -715,7 +609,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                   context,
                   MaterialPageRoute(
                     builder: (context) =>
-                        PreviousRidesPage(jwtToken: widget.accessToken!),
+                        PreviousRidesPage(jwtToken: widget.jwtToken!),
                   ),
                 );
               }

@@ -9,19 +9,21 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'user_page.dart'; // ✅ for navigation back to user page
 
 class UserTrackingPage extends StatefulWidget {
-  final String accessToken;
-  final String? userName;
-  final String? userEmail;
-  final String? userRole;
+  final String? jwtToken;
+  final String? sessionId;
+  final String? csrfToken;
+  final String? refreshToken;
+  final Map<String, dynamic>? userData;
   final WebSocketChannel? passengerSocket;
   final StreamSubscription? socketSubscription;
 
   const UserTrackingPage({
     super.key,
-    required this.accessToken,
-    this.userName,
-    this.userEmail,
-    this.userRole,
+    this.jwtToken,
+    this.sessionId,
+    this.csrfToken,
+    this.refreshToken,
+    this.userData,
     this.passengerSocket,
     this.socketSubscription,
   });
@@ -46,8 +48,30 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   @override
   void initState() {
     super.initState();
+    // Reuse the provided WebSocketChannel (do not create a new connection)
     _rideTrackingSocket = widget.passengerSocket;
-    _socketSubscription = widget.socketSubscription;
+
+    // If a StreamSubscription was forwarded (from LoadingScreen), cancel it
+    // so we can create our own listener with this page's handler.
+    if (widget.socketSubscription != null) {
+      try {
+        widget.socketSubscription?.cancel();
+      } catch (e) {
+        print('Warning: failed to cancel incoming subscription: $e');
+      }
+    }
+
+    // Create a fresh subscription on the shared socket so this page
+    // receives events with its own handler.
+    if (_rideTrackingSocket != null) {
+      _socketSubscription = _rideTrackingSocket!.stream.listen(
+        _handleWebSocketMessage,
+        onError: (err) => print('Tracking WS error: $err'),
+        onDone: () => print('Tracking WS closed'),
+        cancelOnError: false,
+      );
+    }
+
     _initializeTracking();
   }
 
@@ -55,7 +79,79 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   void dispose() {
     _sendStopTracking();
     // Do NOT close the shared socket, only cancel local listeners if any
+    _socketSubscription?.cancel();
     super.dispose();
+  }
+
+  // Handle incoming WebSocket messages for ride tracking
+  void _handleWebSocketMessage(dynamic message) {
+    try {
+      final rawPayload = message is String ? message : message.toString();
+      final data = json.decode(rawPayload) as Map<String, dynamic>;
+      final eventType = data['type'] as String?;
+      if (eventType == null) return;
+
+      final messenger = ScaffoldMessenger.of(context);
+
+      switch (eventType) {
+        case 'tracking_update':
+          // update driver position on map
+          double? lat;
+          double? lng;
+          final latRaw = data['latitude'];
+          final lngRaw = data['longitude'];
+          if (latRaw is num)
+            lat = latRaw.toDouble();
+          else
+            lat = double.tryParse('$latRaw');
+          if (lngRaw is num)
+            lng = lngRaw.toDouble();
+          else
+            lng = double.tryParse('$lngRaw');
+
+          if (lat != null && lng != null) {
+            setState(() {
+              _driverPosition = LatLng(lat!, lng!);
+            });
+          }
+          break;
+
+        case 'ride_cancelled':
+          setState(() {
+            _status = 'cancelled';
+          });
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? 'Ride cancelled'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) Navigator.pop(context);
+          });
+          break;
+
+        case 'ride_completed':
+          setState(() {
+            _status = 'completed';
+          });
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Ride completed!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) Navigator.pop(context);
+          });
+          break;
+
+        default:
+        // ignore other events
+      }
+    } catch (e) {
+      print('Error decoding tracking WS message: $e | raw=$message');
+    }
   }
 
   Future<void> _initializeTracking() async {
@@ -88,7 +184,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current/'),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${widget.accessToken}',
+          'Authorization': 'Bearer ${widget.jwtToken}',
         },
       );
 
@@ -154,7 +250,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       final response = await http.get(
         Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
         headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
+          'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
         },
       );
@@ -193,7 +289,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       final response = await http.post(
         Uri.parse('http://127.0.0.1:8000/api/rides/passenger/$rideId/cancel/'),
         headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
+          'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
         },
       );
@@ -230,19 +326,19 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             print('Navigating from tracking to user page');
             print('========================');
 
-            // Close WebSocket connections
+            // Close local listener only; do NOT close the shared socket.
             _socketSubscription?.cancel();
-            _rideTrackingSocket?.sink.close();
 
             // Navigate back to UserMapScreen with proper parameters
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
                 builder: (context) => UserMapScreen(
-                  userName: widget.userName,
-                  userEmail: widget.userEmail,
-                  userRole: widget.userRole,
-                  accessToken: widget.accessToken,
+                  jwtToken: widget.jwtToken,
+                  sessionId: widget.sessionId,
+                  csrfToken: widget.csrfToken,
+                  refreshToken: widget.refreshToken,
+                  userData: widget.userData,
                 ),
               ),
             );
@@ -420,18 +516,18 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                       ),
                                     );
 
-                                    // Close WebSocket and navigate back to UserMapScreen
+                                    // Cancel local listener and navigate back to UserMapScreen
                                     _socketSubscription?.cancel();
-                                    _rideTrackingSocket?.sink.close();
 
                                     Navigator.pushReplacement(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => UserMapScreen(
-                                          userName: widget.userName,
-                                          userEmail: widget.userEmail,
-                                          userRole: widget.userRole,
-                                          accessToken: widget.accessToken,
+                                          jwtToken: widget.jwtToken,
+                                          sessionId: widget.sessionId,
+                                          csrfToken: widget.csrfToken,
+                                          refreshToken: widget.refreshToken,
+                                          userData: widget.userData,
                                         ),
                                       ),
                                     );

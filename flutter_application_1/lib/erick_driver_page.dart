@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'profile.dart';
-import 'ride_tracking_page.dart';
+import 'erick_tracking_page.dart';
 import 'previous_rides.dart';
 import 'utils/socket_channel_factory.dart';
 
@@ -176,7 +176,9 @@ class _DriverPageState extends State<DriverPage> {
     return '$hh:$mm:$ss';
   }
 
-  bool get _canUseDriverSocket => (widget.sessionId?.isNotEmpty ?? false);
+  bool get _canUseDriverSocket =>
+      (widget.jwtToken?.isNotEmpty ?? false) ||
+      (widget.sessionId?.isNotEmpty ?? false);
 
   String get _driverSocketUrl {
     final sanitizedBase = baseUrl.replaceFirst(RegExp(r'^https?://'), '');
@@ -334,6 +336,36 @@ class _DriverPageState extends State<DriverPage> {
     } catch (e) {
       print('Error decoding driver WS message: $e | raw=$message');
     }
+  }
+
+  // Map a raw ride payload from server into the UI notification shape
+  Map<String, dynamic> _rideToNotification(Map<String, dynamic> ride) {
+    final passengerData = ride['passenger'];
+    String passengerName = 'Unknown';
+    String passengerPhone = '';
+
+    if (passengerData is Map) {
+      passengerName = passengerData['username']?.toString() ?? 'Unknown';
+      passengerPhone = passengerData['phone_number']?.toString() ?? '';
+    } else {
+      passengerName = ride['passenger_name']?.toString() ?? 'Unknown';
+      passengerPhone = ride['passenger_phone']?.toString() ?? '';
+    }
+
+    return {
+      'id': ride['id'],
+      'start': ride['pickup_address'] ?? 'Unknown pickup',
+      'end': ride['dropoff_address'] ?? 'Unknown destination',
+      'people': ride['number_of_passengers'] ?? ride['passengers'] ?? 1,
+      'distance': ride['distance_from_driver'] ?? ride['distance'] ?? 0,
+      'passenger_name': passengerName,
+      'passenger_phone': passengerPhone,
+      'pickup_lat': ride['pickup_latitude'] ?? ride['pickup_lat'],
+      'pickup_lng': ride['pickup_longitude'] ?? ride['pickup_lng'],
+      'dropoff_lat': ride['dropoff_latitude'] ?? ride['dropoff_lat'],
+      'dropoff_lng': ride['dropoff_longitude'] ?? ride['dropoff_lng'],
+      'requested_at': ride['requested_at'],
+    };
   }
 
   void _handleIncomingRide(Map<String, dynamic> ridePayload) {
@@ -665,7 +697,7 @@ class _DriverPageState extends State<DriverPage> {
     print('Getting fresh GPS location...');
     await _getCurrentLocation();
 
-    if (_currentPosition != null) {
+    if (_currentPosition != null && _driverSocket != null) {
       try {
         // Truncate coordinates to 6 decimal places
         double truncatedLatitude = double.parse(
@@ -676,46 +708,21 @@ class _DriverPageState extends State<DriverPage> {
         );
 
         print(
-          'Sending location update: $truncatedLatitude, $truncatedLongitude',
+          'Sending location update via WebSocket: $truncatedLatitude, $truncatedLongitude',
         );
 
-        // Use the JWT token from widget (same as other API calls)
-        String? token = widget.jwtToken;
-
-        if (token != null) {
-          print('Token available, making API call...');
-          final response = await http.put(
-            Uri.parse('$baseUrl/api/rides/driver/location/'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: json.encode({
-              'latitude': truncatedLatitude,
-              'longitude': truncatedLongitude,
-            }),
-          );
-
-          print('API Response: ${response.statusCode}');
-          if (response.statusCode == 200) {
-            print(
-              'Location updated successfully: $truncatedLatitude, $truncatedLongitude',
-            );
-          } else {
-            print('Failed to update location: ${response.statusCode}');
-            print('Response: ${response.body}');
-          }
-        } else {
-          print('ERROR: No JWT token available for location update');
-        }
+        final wsPayload = json.encode({
+          'type': 'driver_location_update',
+          'latitude': truncatedLatitude,
+          'longitude': truncatedLongitude,
+        });
+        _driverSocket!.sink.add(wsPayload);
       } catch (e) {
-        print('Error updating driver location: $e');
+        print('Error sending driver location via WebSocket: $e');
       }
     } else {
-      print('ERROR: Could not get current position');
+      print('ERROR: Could not get current position or WebSocket not connected');
     }
-
-    print('=== LOCATION UPDATE FINISHED ===');
   }
 
   Future<void> _loadDriverData() async {
@@ -734,7 +741,7 @@ class _DriverPageState extends State<DriverPage> {
     try {
       // Load driver profile first, then nearby rides (need profile for fallback location)
       await _fetchDriverProfile();
-      await _fetchNearbyRides();
+      // No need to fetch nearby rides via REST; ride requests come via WebSocket.
 
       // Start location updates if driver is active
       if (isActive) {
@@ -831,175 +838,6 @@ class _DriverPageState extends State<DriverPage> {
     }
   }
 
-  Future<void> _fetchNearbyRides() async {
-    print('=== FETCH NEARBY RIDES STARTED ===');
-    print('Driver Profile available: ${driverProfile != null}');
-    print('Current Position available: ${_currentPosition != null}');
-    print('isActive: $isActive');
-
-    try {
-      // Get current position for the API request
-      Position? position = _currentPosition;
-      if (position == null) {
-        try {
-          position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.high,
-          );
-        } catch (e) {
-          print('Unable to get current position for nearby rides: $e');
-          // Use driver profile location as fallback
-          if (driverProfile != null &&
-              driverProfile!['current_latitude'] != null &&
-              driverProfile!['current_longitude'] != null) {
-            final lat = double.tryParse(
-              driverProfile!['current_latitude'].toString(),
-            );
-            final lng = double.tryParse(
-              driverProfile!['current_longitude'].toString(),
-            );
-            if (lat != null && lng != null) {
-              print('Using driver profile location: $lat, $lng');
-            } else {
-              print('No valid location available for nearby rides API');
-              setState(() {
-                notifications = [];
-              });
-              return;
-            }
-          } else {
-            print('No location available for nearby rides API');
-            setState(() {
-              notifications = [];
-            });
-            return;
-          }
-        }
-      }
-
-      // Prepare request body with location
-      final lat =
-          position?.latitude ??
-          double.tryParse(driverProfile!['current_latitude'].toString());
-      final lng =
-          position?.longitude ??
-          double.tryParse(driverProfile!['current_longitude'].toString());
-
-      // Ensure we have valid coordinates
-      if (lat == null || lng == null) {
-        print('ERROR: Cannot get valid coordinates - lat: $lat, lng: $lng');
-        setState(() {
-          notifications = [];
-        });
-        return;
-      }
-
-      // Round to 6 decimal places to match backend expectations
-      final requestBody = {
-        'latitude': double.parse(lat.toStringAsFixed(6)),
-        'longitude': double.parse(lng.toStringAsFixed(6)),
-      };
-
-      print('Raw coordinates: lat=$lat, lng=$lng');
-      print(
-        'Rounded coordinates: lat=${requestBody['latitude']}, lng=${requestBody['longitude']}',
-      );
-
-      print(
-        'Fetching nearby rides with location: ${requestBody['latitude']}, ${requestBody['longitude']}',
-      );
-      print('Request body JSON: ${json.encode(requestBody)}');
-
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/driver/nearby-rides/'),
-        headers: {
-          'Authorization': 'Bearer ${widget.jwtToken}',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode(requestBody),
-      );
-
-      print('Nearby rides API response: ${response.statusCode}');
-      print('Nearby rides API body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> ridesData = data['rides'] ?? [];
-
-        print('Found ${ridesData.length} nearby rides from API');
-
-        // Filter out rejected rides and map to notification format
-        final filteredRides = ridesData
-            .where((ride) {
-              final rideId = ride['id'] as int;
-              final isRejected = _rejectedRideIds.contains(rideId);
-              if (isRejected) {
-                print('Filtering out rejected ride ID: $rideId');
-              }
-              return !isRejected;
-            })
-            .map<Map<String, dynamic>>((ride) {
-              final rideMap = Map<String, dynamic>.from(ride as Map);
-              return _rideToNotification(rideMap);
-            })
-            .toList();
-
-        setState(() {
-          notifications = filteredRides;
-        });
-
-        print(
-          'After filtering: ${notifications.length} rides (rejected ${ridesData.length - notifications.length} rides)',
-        );
-        print('Final notifications state: $notifications');
-        print('Current rejected rides: $_rejectedRideIds');
-        print('=== NOTIFICATIONS UPDATE COMPLETE ===');
-      } else if (response.statusCode == 400) {
-        // Driver not available or no location
-        print('Driver not available or location issue');
-        setState(() {
-          notifications = [];
-        });
-      } else {
-        throw Exception('Failed to load nearby rides: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Nearby rides error: $e');
-      // Don't throw here, just set empty notifications
-      setState(() {
-        notifications = [];
-      });
-    }
-  }
-
-  Map<String, dynamic> _rideToNotification(Map<String, dynamic> ride) {
-    final passengerData = ride['passenger'];
-    String passengerName = 'Unknown';
-    String passengerPhone = '';
-
-    if (passengerData is Map) {
-      passengerName = passengerData['username']?.toString() ?? 'Unknown';
-      passengerPhone = passengerData['phone_number']?.toString() ?? '';
-    } else {
-      passengerName = ride['passenger_name']?.toString() ?? 'Unknown';
-      passengerPhone = ride['passenger_phone']?.toString() ?? '';
-    }
-
-    return {
-      'id': ride['id'],
-      'start': ride['pickup_address'] ?? 'Unknown pickup',
-      'end': ride['dropoff_address'] ?? 'Unknown destination',
-      'people': ride['number_of_passengers'] ?? ride['passengers'] ?? 1,
-      'distance': ride['distance_from_driver'] ?? ride['distance'] ?? 0,
-      'passenger_name': passengerName,
-      'passenger_phone': passengerPhone,
-      'pickup_lat': ride['pickup_latitude'] ?? ride['pickup_lat'],
-      'pickup_lng': ride['pickup_longitude'] ?? ride['pickup_lng'],
-      'dropoff_lat': ride['dropoff_latitude'] ?? ride['dropoff_lat'],
-      'dropoff_lng': ride['dropoff_longitude'] ?? ride['dropoff_lng'],
-      'requested_at': ride['requested_at'],
-    };
-  }
-
   Future<void> _updateDriverStatus(bool active) async {
     if (widget.jwtToken == null) return;
 
@@ -1042,8 +880,7 @@ class _DriverPageState extends State<DriverPage> {
         // Start or stop location updates based on status
         if (active) {
           _startLocationUpdates();
-          // Refresh nearby rides when going online
-          await _fetchNearbyRides();
+          // No need to fetch nearby rides when going online; ride requests come via WebSocket.
         } else {
           _stopLocationUpdates();
           // Clear notifications when going offline
@@ -1124,6 +961,7 @@ class _DriverPageState extends State<DriverPage> {
                     ? double.tryParse(notification['dropoff_lng'].toString())
                     : null,
                 accessToken: widget.jwtToken,
+                rideSocket: _driverSocket,
                 isDriver: true,
               ),
             ),
@@ -1172,6 +1010,25 @@ class _DriverPageState extends State<DriverPage> {
         isLoading = false;
       });
     }
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
   }
 
   void _showBottomSheet(Map<String, dynamic> notif) {
@@ -1241,25 +1098,6 @@ class _DriverPageState extends State<DriverPage> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          Expanded(child: Text(value)),
-        ],
-      ),
     );
   }
 

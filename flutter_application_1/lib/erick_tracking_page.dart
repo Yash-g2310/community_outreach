@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import 'dart:convert';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -21,6 +22,7 @@ class RideTrackingPage extends StatefulWidget {
   final double? dropoffLng;
   final String? accessToken;
   final bool isDriver; // true if current user is driver, false if passenger
+  final dynamic rideSocket; // WebSocket channel for ride group events
 
   const RideTrackingPage({
     super.key,
@@ -39,6 +41,7 @@ class RideTrackingPage extends StatefulWidget {
     this.dropoffLng,
     this.accessToken,
     required this.isDriver,
+    this.rideSocket,
   });
 
   @override
@@ -50,6 +53,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   String _rideStatus = 'accepted';
   bool _isLoading = false;
   Timer? _locationTimer;
+  StreamSubscription? _wsSubscription;
 
   // API Configuration
   static const String baseUrl = 'http://localhost:8000';
@@ -58,11 +62,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   void initState() {
     super.initState();
     _initializeTracking();
+    _listenForRideTrackingEvents();
   }
 
   @override
   void dispose() {
     _locationTimer?.cancel();
+    _wsSubscription?.cancel();
     super.dispose();
   }
 
@@ -88,8 +94,114 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   void _startLocationUpdates() {
     _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       _getCurrentLocation();
-      // Here you could also fetch ride status updates from backend
+      // Location updates only, ride status handled by WebSocket
     });
+  }
+
+  // Listen for WebSocket ride tracking events
+  void _listenForRideTrackingEvents() {
+    // Prevent double-listening
+    if (_wsSubscription != null) return;
+
+    final socket = widget.rideSocket;
+    if (socket == null) return;
+
+    // If the caller passed an existing StreamSubscription, reuse it
+    if (socket is StreamSubscription) {
+      _wsSubscription = socket;
+      return;
+    }
+
+    // Otherwise try to subscribe to a stream exposed by the socket-like object
+    try {
+      final stream = socket.stream;
+      if (stream is Stream) {
+        _wsSubscription = stream.listen(
+          _handleWebSocketMessage,
+          onError: (err) {
+            print('❌ Tracking WS Error: $err');
+          },
+          onDone: () {
+            print('🔌 Tracking WS Closed');
+          },
+          cancelOnError: false,
+        );
+
+        // If the socket exposes a sink, send the start_tracking command
+        try {
+          // Client (driver) sends start_tracking msg to server
+          final sink = socket.sink;
+          sink.add(
+            json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
+          );
+        } catch (e) {
+          // Not fatal — some callers may pass only a subscription
+        }
+      }
+    } catch (e) {
+      print('Ride tracking socket does not expose a stream: $e');
+    }
+  }
+
+  void _handleWebSocketMessage(dynamic message) {
+    try {
+      final rawPayload = message is String ? message : message.toString();
+      final data = json.decode(rawPayload) as Map<String, dynamic>;
+      final eventType = data['type'] as String?;
+      if (eventType == null) return;
+
+      final messenger = ScaffoldMessenger.of(context);
+
+      switch (eventType) {
+        case 'tracking_update':
+          // Update position on map
+          final lat = data['latitude'] as double?;
+          final lng = data['longitude'] as double?;
+          if (lat != null && lng != null) {
+            setState(() {
+              _currentPosition = LatLng(lat, lng);
+            });
+          }
+          break;
+        case 'ride_cancelled':
+        case 'ride_expired':
+          setState(() {
+            _rideStatus = 'cancelled';
+          });
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? 'Ride cancelled'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              Navigator.pop(context);
+            }
+          });
+          break;
+        case 'ride_completed':
+          setState(() {
+            _rideStatus = 'completed';
+          });
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Ride completed!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              Navigator.pop(context);
+            }
+          });
+          break;
+        default:
+        // Ignore other events
+      }
+    } catch (e) {
+      print('Error decoding WS message: $e | raw=$message');
+    }
   }
 
   Future<void> _completeRide() async {
