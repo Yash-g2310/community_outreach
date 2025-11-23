@@ -9,6 +9,8 @@ from django.utils import timezone
 from .models import DriverProfile, RideOffer, RideRequest
 from .serializers import RideRequestSerializer
 from .utils import calculate_distance
+from rides.tasks import expire_ride_offer_task
+from rides.tasks import expire_ride_offer_task
 
 
 def build_offers_for_ride(ride: RideRequest) -> list[RideOffer]:
@@ -105,6 +107,8 @@ def dispatch_next_offer(ride: RideRequest) -> bool:
         }
     )
 
+    # Schedule Celery expiry task for this offer
+    expire_ride_offer_task.apply_async((offer.id,), countdown=20)
     return True
 
 
