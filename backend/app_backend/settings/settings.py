@@ -9,18 +9,17 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
 from pathlib import Path
+from datetime import timedelta
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-d+6g9%r(kg$2!!v&jc)8q4rfjd)vz8rklmv*m(+_jne+v)(fcy'
+load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -46,14 +45,6 @@ INSTALLED_APPS = [
     # Local apps
     'rides',
 ]
-
-# Celery Configuration
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'Asia/Kolkata'
  
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -128,6 +119,13 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Kolkata'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
@@ -176,8 +174,6 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 # JWT Settings
-from datetime import timedelta
-
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
@@ -192,7 +188,7 @@ CHANNEL_LAYERS = {
     }
 }
 
-RIDE_OFFER_TIMEOUT_SECONDS = 10
+RIDE_OFFER_TIMEOUT_SECONDS = 20  # Updated to match Celery timeout
 RIDE_OFFER_MONITOR_INTERVAL = 5
-ENABLE_OFFER_TIMEOUT_MONITOR = True
+ENABLE_OFFER_TIMEOUT_MONITOR = False  # Disabled - using Celery instead
 

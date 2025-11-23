@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from channels.layers import get_channel_layer
+import redis
+import os
 
 from .consumers import notify_nearby_passengers_sync
 from .models import DriverProfile, RideRequest
@@ -20,6 +22,65 @@ from .notifications import (
     notify_passenger_event
 )
 from .utils import calculate_distance
+
+
+@api_view(['GET'])
+def health_check(request):
+    """Health check endpoint for monitoring system status"""
+    health_status = {
+        'status': 'healthy',
+        'timestamp': timezone.now().isoformat(),
+        'services': {}
+    }
+
+    # Check database
+    try:
+        RideRequest.objects.count()
+        health_status['services']['database'] = 'healthy'
+    except Exception as e:
+        health_status['services']['database'] = f'unhealthy: {str(e)}'
+        health_status['status'] = 'unhealthy'
+
+    # Check Redis
+    try:
+        redis_client = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            db=0,
+            socket_timeout=5
+        )
+        redis_client.ping()
+        health_status['services']['redis'] = 'healthy'
+    except Exception as e:
+        health_status['services']['redis'] = f'unhealthy: {str(e)}'
+        health_status['status'] = 'unhealthy'
+
+    # Check channel layer
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            health_status['services']['channels'] = 'healthy'
+        else:
+            health_status['services']['channels'] = 'unhealthy: no channel layer'
+            health_status['status'] = 'unhealthy'
+    except Exception as e:
+        health_status['services']['channels'] = f'unhealthy: {str(e)}'
+        health_status['status'] = 'unhealthy'
+
+    # Check Celery (by checking if task is registered)
+    try:
+        from .tasks import expire_ride_offer_task
+        if expire_ride_offer_task:
+            health_status['services']['celery'] = 'healthy'
+        else:
+            health_status['services']['celery'] = 'unhealthy: task not found'
+            health_status['status'] = 'unhealthy'
+    except Exception as e:
+        health_status['services']['celery'] = f'unhealthy: {str(e)}'
+        health_status['status'] = 'unhealthy'
+
+    status_code = status.HTTP_200_OK if health_status['status'] == 'healthy' else status.HTTP_503_SERVICE_UNAVAILABLE
+    return Response(health_status, status=status_code)
 
 
 @api_view(['GET', 'POST', 'PUT', 'PATCH'])

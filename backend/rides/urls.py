@@ -4,6 +4,9 @@ from . import views
 app_name = 'rides'
 
 urlpatterns = [
+    # Health check
+    path('health/', views.health_check, name='health-check'),
+
     # views.py contains all the actual API endpoints implementations
 
     # User Profile

@@ -9,8 +9,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--timeout",
             type=int,
-            default=10,
-            help="Timeout in seconds before an offer automatically expires (default: 10).",
+            default=20,
+            help="Timeout in seconds before an offer automatically expires (default: 20).",
         )
 
     def handle(self, *args, **options):

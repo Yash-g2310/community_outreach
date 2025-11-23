@@ -315,8 +315,8 @@ class AppConsumer(AsyncWebsocketConsumer):
             })
         """
         await self.send_json({
-            "type": "new_ride_request",
-            "ride": event.get("ride_data"),
+            "type": "ride_offer",
+            "ride_data": event.get("ride_data"),
             "offer_id": event.get("offer_id")
         })
 
