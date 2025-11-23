@@ -6,6 +6,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 @shared_task
+def test_task():
+    print("Celery is working!!")
+    return True
+
+@shared_task
 def expire_ride_offer_task(offer_id):
     try:
         offer = RideOffer.objects.get(id=offer_id)
