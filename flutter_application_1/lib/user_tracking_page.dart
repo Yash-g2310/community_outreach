@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -44,31 +46,47 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   WebSocketChannel? _rideTrackingSocket;
   StreamSubscription? _socketSubscription;
   String? _currentRideId;
+  final Set<String> _processedRideEvents = <String>{};
 
   @override
   void initState() {
     super.initState();
-    // Reuse the provided WebSocketChannel (do not create a new connection)
+
+    // Reuse the same WebSocketChannel
     _rideTrackingSocket = widget.passengerSocket;
 
-    // If a StreamSubscription was forwarded (from LoadingScreen), cancel it
-    // so we can create our own listener with this page's handler.
-    if (widget.socketSubscription != null) {
-      try {
-        widget.socketSubscription?.cancel();
-      } catch (e) {
-        print('Warning: failed to cancel incoming subscription: $e');
-      }
-    }
+    // Reuse the same StreamSubscription created in user_page
+    _socketSubscription = widget.socketSubscription;
 
-    // Create a fresh subscription on the shared socket so this page
-    // receives events with its own handler.
-    if (_rideTrackingSocket != null) {
-      _socketSubscription = _rideTrackingSocket!.stream.listen(
-        _handleWebSocketMessage,
-        onError: (err) => print('Tracking WS error: $err'),
-        onDone: () => print('Tracking WS closed'),
-        cancelOnError: false,
+    if (_socketSubscription != null) {
+      // Redirect incoming data to this page's handler
+      _socketSubscription!.onData(_handleWebSocketMessage);
+      _socketSubscription!.onError((err) {
+        print('Tracking WS error: $err');
+      });
+      _socketSubscription!.onDone(() {
+        print('Tracking WS closed');
+      });
+    } else if (_rideTrackingSocket != null) {
+      // If caller didn't pass an existing subscription, create one here
+      try {
+        _socketSubscription = _rideTrackingSocket!.stream.listen(
+          _handleWebSocketMessage,
+          onError: (err) {
+            print('Tracking WS error: $err');
+          },
+          onDone: () {
+            print('Tracking WS closed');
+          },
+          cancelOnError: false,
+        );
+      } catch (e) {
+        print('Warning: Failed to attach tracking subscription: $e');
+      }
+    } else {
+      // (Optional) log debug – no socket available
+      print(
+        'Warning: UserTrackingPage started without a socket or subscription',
       );
     }
 
@@ -79,7 +97,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   void dispose() {
     _sendStopTracking();
     // Do NOT close the shared socket, only cancel local listeners if any
-    _socketSubscription?.cancel();
+    try {
+      _socketSubscription?.cancel();
+    } catch (e) {
+      print('Error cancelling tracking subscription: $e');
+    }
     super.dispose();
   }
 
@@ -91,7 +113,15 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       final eventType = data['type'] as String?;
       if (eventType == null) return;
 
+      // Deduplicate events that may be delivered twice (user_<id> and ride_<id>)
+      final rideIdKey = data['ride_id']?.toString() ?? _currentRideId ?? '';
+      final dedupeKey = '${eventType}_$rideIdKey';
+      if (_processedRideEvents.contains(dedupeKey)) return;
+      _processedRideEvents.add(dedupeKey);
+
       final messenger = ScaffoldMessenger.of(context);
+
+      print('📡 Tracking WS message event: $eventType');
 
       switch (eventType) {
         case 'tracking_update':
@@ -128,8 +158,35 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
               backgroundColor: Colors.orange,
             ),
           );
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) Navigator.pop(context);
+          Future.delayed(const Duration(seconds: 2), () async {
+            if (!mounted) return;
+
+            // Stop tracking and cancel local subscription before navigating
+            try {
+              _sendStopTracking();
+            } catch (_) {}
+
+            try {
+              await _socketSubscription?.cancel();
+            } catch (e) {
+              print(
+                'Error cancelling tracking subscription on ride_cancelled: $e',
+              );
+            }
+
+            // Navigate back to main UserMapScreen so user lands on the map
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => UserMapScreen(
+                  jwtToken: widget.jwtToken,
+                  sessionId: widget.sessionId,
+                  csrfToken: widget.csrfToken,
+                  refreshToken: widget.refreshToken,
+                  userData: widget.userData,
+                ),
+              ),
+            );
           });
           break;
 
@@ -137,18 +194,53 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           setState(() {
             _status = 'completed';
           });
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text('Ride completed!'),
-              backgroundColor: Colors.green,
+
+          // Show a modal dialog so the passenger notices completion
+          if (!mounted) return;
+          showDialog(
+            context: context,
+            barrierDismissible: true,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Ride Completed'),
+              content: Text(data['message'] ?? 'Your ride has been completed.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
             ),
-          );
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) Navigator.pop(context);
+          ).then((_) async {
+            if (!mounted) return;
+
+            // Stop tracking and cancel local subscription before navigating
+            try {
+              _sendStopTracking();
+            } catch (_) {}
+
+            try {
+              await _socketSubscription?.cancel();
+            } catch (e) {
+              print(
+                'Error cancelling tracking subscription on ride_completed: $e',
+              );
+            }
+
+            // Navigate back to main UserMapScreen so user lands on the map
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => UserMapScreen(
+                  jwtToken: widget.jwtToken,
+                  sessionId: widget.sessionId,
+                  csrfToken: widget.csrfToken,
+                  refreshToken: widget.refreshToken,
+                  userData: widget.userData,
+                ),
+              ),
+            );
           });
           break;
-
-        default:
         // ignore other events
       }
     } catch (e) {
@@ -599,6 +691,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.example.erick_app',
+                        tileProvider: kIsWeb
+                            ? CancellableNetworkTileProvider()
+                            : NetworkTileProvider(),
                       ),
                       MarkerLayer(
                         markers: [
