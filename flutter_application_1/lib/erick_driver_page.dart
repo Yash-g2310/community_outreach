@@ -296,6 +296,15 @@ class _DriverPageState extends State<DriverPage> {
             _socketStatusMessage = data['message'] ?? 'Connected';
           });
           break;
+        case 'ride_offer':
+          final rideData = data['ride_data'];
+          final offerId = data['offer_id'];
+          if (rideData is Map && offerId != null) {
+            _handleRideOffer(Map<String, dynamic>.from(rideData), offerId);
+          } else {
+            _logSocket('Malformed ride offer payload');
+          }
+          break;
         case 'new_ride_request':
           final rideData = data['ride'];
           if (rideData is Map) {
@@ -362,6 +371,186 @@ class _DriverPageState extends State<DriverPage> {
       'New ride request received! 🚗',
       backgroundColor: Colors.green,
     );
+  }
+
+  void _handleRideOffer(Map<String, dynamic> rideData, int offerId) {
+    final rideId = rideData['id'];
+    if (rideId == null) {
+      _logSocket('Ride offer missing ID: $rideData');
+      return;
+    }
+
+    if (_rejectedRideIds.contains(rideId)) {
+      _logSocket('Ignoring ride offer $rideId - previously rejected');
+      return;
+    }
+
+    // Show offer dialog with timer
+    _showRideOfferDialog(rideData, offerId);
+  }
+
+  void _showRideOfferDialog(Map<String, dynamic> rideData, int offerId) {
+    int remainingSeconds = 20;
+    Timer? countdownTimer;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false, // Prevent dismissing by tapping outside
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+              setState(() {
+                remainingSeconds--;
+                if (remainingSeconds <= 0) {
+                  timer.cancel();
+                  Navigator.of(context).pop(); // Close dialog
+                  _rejectOffer(offerId, rideData['id']);
+                }
+              });
+            });
+
+            return AlertDialog(
+              title: const Text('🚗 New Ride Offer'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Pickup: ${rideData['pickup_address'] ?? 'N/A'}'),
+                  Text('Dropoff: ${rideData['dropoff_address'] ?? 'N/A'}'),
+                  Text('Passengers: ${rideData['number_of_passengers'] ?? 1}'),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Time remaining: $remainingSeconds seconds',
+                    style: TextStyle(
+                      color: remainingSeconds <= 5 ? Colors.red : Colors.black,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  LinearProgressIndicator(
+                    value: remainingSeconds / 20.0,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      remainingSeconds <= 5 ? Colors.red : Colors.green,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    countdownTimer?.cancel();
+                    Navigator.of(context).pop();
+                    _rejectOffer(offerId, rideData['id']);
+                  },
+                  child: const Text('Reject'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    countdownTimer?.cancel();
+                    Navigator.of(context).pop();
+                    _acceptOffer(offerId, rideData['id']);
+                  },
+                  child: const Text('Accept'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).then((_) {
+      countdownTimer?.cancel(); // Ensure timer is cancelled when dialog closes
+    });
+  }
+
+  Future<void> _acceptOffer(int offerId, int rideId) async {
+    if (widget.jwtToken == null) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/handle/$rideId/accept/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'offer_id': offerId}), // Include offer_id in request
+      );
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        _showSnackBar(
+          'Ride offer accepted successfully! ✅',
+          backgroundColor: Colors.green,
+        );
+
+        // Navigate to ride tracking page
+        final rideData = jsonDecode(response.body);
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RideTrackingPage(
+                rideId: rideId,
+                pickupAddress: rideData['pickup_address'] ?? 'N/A',
+                dropoffAddress: rideData['dropoff_address'] ?? 'N/A',
+                numberOfPassengers: rideData['number_of_passengers'] ?? 1,
+                passengerName: rideData['passenger']['username'] ?? 'Passenger',
+                passengerPhone: rideData['passenger']['phone_number'] ?? 'N/A',
+                vehicleNumber: driverProfile?['vehicle_number'] ?? 'N/A',
+                isDriver: true,
+              ),
+            ),
+          );
+        }
+      } else {
+        final errorData = jsonDecode(response.body);
+        _showSnackBar(
+          'Failed to accept offer: ${errorData['message'] ?? 'Unknown error'}',
+          backgroundColor: Colors.red,
+        );
+      }
+    } catch (e) {
+      _showSnackBar('Error accepting offer: $e', backgroundColor: Colors.red);
+    } finally {
+      _safeSetState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _rejectOffer(int offerId, int rideId) async {
+    if (widget.jwtToken == null) return;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/rides/handle/$rideId/reject/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'offer_id': offerId}), // Include offer_id in request
+      );
+
+      if (response.statusCode == 200) {
+        _showSnackBar(
+          'Ride offer rejected',
+          backgroundColor: Colors.orange,
+        );
+      } else {
+        final errorData = jsonDecode(response.body);
+        _showSnackBar(
+          'Failed to reject offer: ${errorData['message'] ?? 'Unknown error'}',
+          backgroundColor: Colors.red,
+        );
+      }
+    } catch (e) {
+      _showSnackBar('Error rejecting offer: $e', backgroundColor: Colors.red);
+    }
   }
 
   void _handleRideRemoval(dynamic rideIdRaw, String reason) {
