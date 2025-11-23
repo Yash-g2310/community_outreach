@@ -1,6 +1,9 @@
 import 'dart:ui';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'user_page.dart';
+import 'constants.dart';
 
 class RideLoadingScreen extends StatefulWidget {
   final String? jwtToken;
@@ -8,6 +11,7 @@ class RideLoadingScreen extends StatefulWidget {
   final String? csrfToken;
   final String? refreshToken;
   final Map<String, dynamic>? userData;
+  final int? rideId;
 
   const RideLoadingScreen({
     super.key,
@@ -16,6 +20,7 @@ class RideLoadingScreen extends StatefulWidget {
     this.csrfToken,
     this.refreshToken,
     this.userData,
+    this.rideId,
   });
 
   @override
@@ -24,85 +29,232 @@ class RideLoadingScreen extends StatefulWidget {
 
 class _RideLoadingScreenState extends State<RideLoadingScreen>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _rotationController;
+  late final AnimationController _controller;
+  late final Animation<double> _innerScale;
+  late final Animation<double> _outerScale;
 
   @override
   void initState() {
     super.initState();
 
-    // Start spinner animation
-    _rotationController = AnimationController(
+    _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    )..repeat(reverse: true);
 
-    // No socket handling here — this screen is purely a UI placeholder
-    // while `user_page` continues to listen for ride events and
-    // navigates to `UserTrackingPage` when the server accepts the ride.
+    _innerScale = Tween<double>(
+      begin: 0.95,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
+    _outerScale = Tween<double>(
+      begin: 1.0,
+      end: 1.12,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
   void dispose() {
-    _rotationController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
-  // ============================================================
-  // UI
-  // ============================================================
+  Widget buildRing({
+    required double size,
+    required double border,
+    required Animation<double> scale,
+    required Animation<double> opacity,
+  }) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (_, __) {
+        return Opacity(
+          opacity: opacity.value,
+          child: Transform.scale(
+            scale: scale.value,
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: border),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    const double base = 180;
+
     return Scaffold(
+      backgroundColor: const Color(0xFF1B2229),
       body: Stack(
         children: [
-          // 🔹 blurred background
+          // Solid dark background (match `loading_overlay.dart`)
           BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(color: Colors.black.withValues(alpha: 0.3)),
+            child: Container(color: const Color(0xFF1B2229)),
           ),
 
-          // 🔹 loading card
+          // ========= PULSING CIRCLE (top area) =========
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 160),
+              child: SizedBox(
+                width: base * 1.8,
+                height: base * 1.8,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    buildRing(
+                      size: base * 1.6,
+                      border: 2,
+                      scale: _outerScale,
+                      opacity: Tween<double>(
+                        begin: 0.08,
+                        end: 0.18,
+                      ).animate(_controller),
+                    ),
+                    buildRing(
+                      size: base * 1.3,
+                      border: 2,
+                      scale: _outerScale,
+                      opacity: Tween<double>(
+                        begin: 0.10,
+                        end: 0.22,
+                      ).animate(_controller),
+                    ),
+                    buildRing(
+                      size: base,
+                      border: 3,
+                      scale: _innerScale,
+                      opacity: Tween<double>(
+                        begin: 0.25,
+                        end: 0.35,
+                      ).animate(_controller),
+                    ),
+
+                    AnimatedBuilder(
+                      animation: _controller,
+                      builder: (_, __) {
+                        return Transform.scale(
+                          scale: _innerScale.value,
+                          child: Container(
+                            width: base,
+                            height: base,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  blurRadius: 40,
+                                  spreadRadius: 8,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    ClipOval(
+                      child: Image.asset(
+                        'assets/erick.png',
+                        width: base * 0.85,
+                        height: base * 0.85,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // ============================================
+
+          // ========= TEXT + CANCEL BUTTON (no box) =========
           Align(
             alignment: Alignment.bottomCenter,
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 80),
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-              ),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 80),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RotationTransition(
-                    turns: _rotationController,
-                    child: Image.asset(
-                      'assets/erick.png',
-                      width: 80,
-                      height: 80,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
                   const Text(
                     'Please Wait !!',
                     style: TextStyle(
-                      color: Colors.black,
+                      color: Colors.white,
                       fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                      shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+                      fontSize: 18,
+                      shadows: [Shadow(blurRadius: 6, color: Colors.black)],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  // Cancel button
+                  const SizedBox(height: 24),
+
                   SizedBox(
-                    width: double.infinity,
+                    width: MediaQuery.of(context).size.width * 0.85,
                     child: OutlinedButton(
-                      onPressed: () {
-                        // UI-only cancel: simply navigate back to the map screen.
+                      onPressed: () async {
+                        // Try to cancel the ride on the backend if we have a rideId
+                        if (widget.rideId != null && widget.jwtToken != null) {
+                          final uri = Uri.parse(
+                            '$kBaseUrl/api/rides/passenger/${widget.rideId}/cancel/',
+                          );
+                          try {
+                            final resp = await http.post(
+                              uri,
+                              headers: {
+                                'Authorization': 'Bearer ${widget.jwtToken}',
+                                'Content-Type': 'application/json',
+                              },
+                              body: jsonEncode({'reason': 'Cancelled by user'}),
+                            );
+
+                            if (resp.statusCode >= 200 &&
+                                resp.statusCode < 300) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Ride cancelled'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              }
+                            } else {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Failed to cancel ride (${resp.statusCode})',
+                                    ),
+                                    backgroundColor: Colors.orange,
+                                  ),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Network error while cancelling',
+                                  ),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        }
+
+                        // Navigate back to user map regardless
                         Navigator.of(context).pushReplacement(
                           MaterialPageRoute(
-                            builder: (context) => UserMapScreen(
+                            builder: (_) => UserMapScreen(
                               jwtToken: widget.jwtToken,
                               sessionId: widget.sessionId,
                               csrfToken: widget.csrfToken,
@@ -113,17 +265,17 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
                         );
                       },
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white, width: 1.5),
+                        side: const BorderSide(color: Colors.white, width: 1.4),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(25),
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        backgroundColor: Colors.white.withValues(alpha: 0.1),
+                        backgroundColor: Colors.white.withValues(alpha: 0.05),
                       ),
                       child: const Text(
                         'Cancel',
                         style: TextStyle(
-                          color: Colors.black87,
+                          color: Colors.white,
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),

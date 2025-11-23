@@ -476,6 +476,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                 csrfToken: widget.csrfToken,
                 refreshToken: widget.refreshToken,
                 userData: widget.userData,
+                rideId: responseData['id'],
               ),
             ),
           );
