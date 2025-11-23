@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 from .consumers import notify_nearby_passengers_sync
 from .models import DriverProfile, RideRequest
@@ -290,6 +291,17 @@ def create_ride_request(request):
         offers = build_offers_for_ride(ride)
         if offers:
             dispatch_next_offer(ride)
+        else:
+            # No drivers within broadcast radius at time of request — notify passenger
+            try:
+                notify_passenger_event(
+                    'no_drivers_available',
+                    ride,
+                    'No drivers found nearby. Please try again later.'
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('Failed to notify passenger of no nearby drivers')
         driver_candidates = len(offers)
         response_message = (
             'Notifying nearby drivers...'
@@ -410,6 +422,22 @@ def cancel_ride(request, ride_id):
                 'Passenger cancelled this ride.',
             )
             notified_driver_ids.add(ride.driver_id)
+
+        # Also notify any listeners subscribed to the ride group (ride_<id>)
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    f'ride_{ride.id}',
+                    {
+                        'type': 'ride_cancelled',
+                        'ride_id': ride.id,
+                        'message': 'Passenger cancelled this ride.',
+                    },
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('Failed to notify ride group of cancellation')
 
         viewed_offer_driver_ids = ride.offers.filter(sent_at__isnull=False).values_list('driver_id', flat=True)
         for driver_id in viewed_offer_driver_ids:
@@ -653,7 +681,7 @@ def accept_ride(request, ride_id):
     # Notify passenger that their ride was accepted
     from .notifications import notify_passenger_event
     notify_passenger_event(
-        'ride_accepted_by_driver',
+        'ride_accepted',
         ride,
         'Your ride has been accepted! The driver is on the way.',
     )
@@ -718,6 +746,26 @@ def reject_ride_offer(request, ride_id):
     if not dispatched and not ride.offers.filter(status='pending').exists():
         ride.status = 'no_drivers'
         ride.save(update_fields=['status'])
+        # Notify passenger depending on whether any offers were actually sent.
+        # If any offers were sent (sent_at not null) -> sequential-offers flow failed → send 'ride_expired'.
+        # If no offers were ever sent -> there were no drivers nearby -> send 'no_drivers_available'.
+        try:
+            sent_offers_exist = ride.offers.filter(sent_at__isnull=False).exists()
+            if sent_offers_exist:
+                notify_passenger_event(
+                    'ride_expired',
+                    ride,
+                    'No drivers accepted your ride request. Please try again later.'
+                )
+            else:
+                notify_passenger_event(
+                    'no_drivers_available',
+                    ride,
+                    'No drivers available nearby. Please try again later.'
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('Failed to notify passenger of no drivers available')
 
     return Response({
         'success': True,
@@ -790,6 +838,32 @@ def complete_ride(request, ride_id):
     # Make driver available again
     ride.driver.driver_profile.status = 'available'
     ride.driver.driver_profile.save()
+    # Notify passenger that the ride has been completed and notify ride group
+    try:
+        notify_passenger_event(
+            'ride_completed',
+            ride,
+            'Your ride has been completed. Thank you for riding with us!',
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('Failed to notify passenger of ride completion')
+
+    # Also notify any listeners subscribed to the ride group (ride_<id>)
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is not None:
+            async_to_sync(channel_layer.group_send)(
+                f'ride_{ride.id}',
+                {
+                    'type': 'ride_completed',
+                    'ride_id': ride.id,
+                    'message': 'Ride completed by driver',
+                },
+            )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('Failed to notify ride group of completion')
     
     return Response({
         'success': True,
@@ -834,6 +908,34 @@ def driver_cancel_ride(request, ride_id):
         # Make driver available again
         request.user.driver_profile.status = 'available'
         request.user.driver_profile.save()
+        
+        # Notify passenger via websocket that driver cancelled
+        try:
+            from .notifications import notify_passenger_event
+            notify_passenger_event(
+                'ride_cancelled',
+                ride,
+                'Driver cancelled the ride. Please request again.',
+            )
+        except Exception:
+            # best-effort - don't fail the API if WS notify fails
+            import logging
+            logging.getLogger(__name__).exception('Failed to notify passenger of driver cancellation')
+        # Also notify any listeners subscribed to the ride group (ride_<id>)
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    f'ride_{ride.id}',
+                    {
+                        'type': 'ride_cancelled',
+                        'ride_id': ride.id,
+                        'message': 'Driver cancelled the ride. Please request again.',
+                    },
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('Failed to notify ride group of driver cancellation')
         
         return Response({
             'success': True,

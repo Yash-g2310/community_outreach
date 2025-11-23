@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -71,6 +72,7 @@ class _DriverPageState extends State<DriverPage> {
   StreamSubscription? _driverSocketSubscription;
   Timer? _socketReconnectTimer;
   bool _shouldMaintainSocket = true;
+  bool _socketTransferred = false;
   bool _isSocketConnected = false;
   String? _socketStatusMessage;
   int _socketReconnectAttempts = 0;
@@ -92,7 +94,14 @@ class _DriverPageState extends State<DriverPage> {
   void dispose() {
     _shouldMaintainSocket = false;
     _socketReconnectTimer?.cancel();
-    _cancelDriverSocket();
+    if (!_socketTransferred) {
+      _cancelDriverSocket();
+    } else {
+      // If we transferred the subscription to tracking page, don't close the socket here.
+      _logSocket(
+        'Socket ownership transferred to tracking page; leaving socket open',
+      );
+    }
     _locationUpdateTimer?.cancel();
     super.dispose();
   }
@@ -301,11 +310,22 @@ class _DriverPageState extends State<DriverPage> {
         case 'new_ride_request':
           final rideData = data['ride'];
           if (rideData is Map) {
-            _handleIncomingRide(Map<String, dynamic>.from(rideData));
+            // Only add incoming rides that are still pending. If the ride was
+            // cancelled or already accepted, skip adding it to the driver's list.
+            final Map<String, dynamic> rd = Map<String, dynamic>.from(rideData);
+            final status = rd['status']?.toString();
+            if (status == null || status == 'pending') {
+              _handleIncomingRide(rd);
+            } else {
+              _logSocket(
+                'Ignoring incoming ride (status=$status): ${rd['id']}',
+              );
+            }
           } else {
             _logSocket('Malformed ride payload: ${rideData.runtimeType}');
           }
           break;
+
         case 'ride_cancelled':
         case 'ride_accepted':
         case 'ride_expired':
@@ -319,7 +339,31 @@ class _DriverPageState extends State<DriverPage> {
                     : 'Ride accepted by another driver'),
           );
           break;
-        case 'pong':
+
+        case 'offer_accept_failed':
+          // Backend informed us that the accept attempt failed (race or already taken)
+          final rideId = data['ride_id'];
+          final message = data['message'] ?? 'Ride is no longer available';
+
+          // Remove the ride from our list (if present) and show a visible dialog
+          _handleRideRemoval(rideId, message);
+
+          if (mounted) {
+            // Show an alert so the driver clearly notices the failure
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Accept Failed'),
+                content: Text(message),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
           break;
         default:
           print('Unhandled WS event: $data');
@@ -749,6 +793,11 @@ class _DriverPageState extends State<DriverPage> {
 
         // Navigate to ride tracking page
         if (mounted) {
+          // Transfer the existing socket subscription to the tracking page
+          final transferredSubscription = _driverSocketSubscription;
+          _driverSocketSubscription = null;
+          _socketTransferred = true;
+
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -773,6 +822,7 @@ class _DriverPageState extends State<DriverPage> {
                     : null,
                 accessToken: widget.jwtToken,
                 rideSocket: _driverSocket,
+                socketSubscription: transferredSubscription,
                 isDriver: true,
               ),
             ),
@@ -1026,6 +1076,9 @@ class _DriverPageState extends State<DriverPage> {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.example.erick_driver',
+                        tileProvider: kIsWeb
+                            ? CancellableNetworkTileProvider()
+                            : NetworkTileProvider(),
                       ),
                       MarkerLayer(
                         markers: [
@@ -1090,109 +1143,6 @@ class _DriverPageState extends State<DriverPage> {
                           ),
                           child: Column(
                             children: [
-                              if (_socketStatusMessage != null)
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  decoration: BoxDecoration(
-                                    color: _isSocketConnected
-                                        ? Colors.green[100]
-                                        : Colors.orange[100],
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        _isSocketConnected
-                                            ? Icons.wifi
-                                            : Icons.wifi_off,
-                                        color: _isSocketConnected
-                                            ? Colors.green
-                                            : Colors.orange,
-                                        size: 18,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          _socketStatusMessage!,
-                                          style: TextStyle(
-                                            color: _isSocketConnected
-                                                ? Colors.green[900]
-                                                : Colors.orange[900],
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                      if (!_isSocketConnected &&
-                                          _canUseDriverSocket)
-                                        IconButton(
-                                          icon: const Icon(Icons.refresh),
-                                          tooltip: 'Reconnect',
-                                          onPressed: _manualSocketReconnect,
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              if (_lastSocketMessageAt != null)
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: Text(
-                                      'Last socket heartbeat: ${_formatTimestamp(_lastSocketMessageAt)}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (_lastRideReceivedAt != null)
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: Text(
-                                      'Last ride payload: ${_formatTimestamp(_lastRideReceivedAt)}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (_socketReconnectAttempts > 0)
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: Text(
-                                      'Reconnect attempt #$_socketReconnectAttempts scheduled',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.orange,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (_lastSocketError != null)
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: Text(
-                                      'Last socket error: $_lastSocketError',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.red,
-                                      ),
-                                    ),
-                                  ),
-                                ),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [

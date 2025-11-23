@@ -188,3 +188,12 @@ RIDE_OFFER_TIMEOUT_SECONDS = 10
 RIDE_OFFER_MONITOR_INTERVAL = 5
 ENABLE_OFFER_TIMEOUT_MONITOR = True
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'root': {'handlers': ['console'], 'level': 'INFO'},
+    'loggers': {
+        'rides.notifications': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+    },
+}

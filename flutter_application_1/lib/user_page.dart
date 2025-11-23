@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:math' as math;
 import 'profile.dart';
 import 'previous_rides.dart';
 import 'utils/socket_channel_factory.dart';
@@ -63,6 +64,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   WebSocketChannel? _passengerSocket;
   StreamSubscription? _socketSubscription;
   bool _socketTransferred = false;
+  final Set<String> _processedRideEvents = <String>{};
 
   // 👇 Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -172,6 +174,8 @@ class _UserMapScreenState extends State<UserMapScreen> {
       _socketSubscription = _passengerSocket!.stream.listen(
         (message) {
           if (!mounted) return;
+          // handler may be async; we don't await here but it will await inside as needed
+          print("WS RAW → $message");
           _handlePassengerSocketMessage(message);
         },
         onError: (error) {
@@ -181,6 +185,12 @@ class _UserMapScreenState extends State<UserMapScreen> {
           print('🔌 Passenger WebSocket connection closed');
         },
       );
+
+      // Logging: subscription created
+      try {
+        final ts = DateTime.now().toIso8601String();
+        print('📡 Passenger WS subscription created at $ts');
+      } catch (_) {}
     } catch (e) {
       print('❌ Failed to connect passenger WebSocket: $e');
     }
@@ -189,10 +199,21 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   // 📨 Handle incoming WebSocket messages
   // ============================================================
-  void _handlePassengerSocketMessage(dynamic message) {
+  Future<void> _handlePassengerSocketMessage(dynamic message) async {
     try {
       final data = jsonDecode(message);
       final eventType = data['type'];
+
+      // Only dedupe ride-related events
+      if (eventType.startsWith("ride_")) {
+        final rideIdKey = data['ride_id']?.toString() ?? '';
+        final dedupeKey = '${eventType}_$rideIdKey';
+
+        if (_processedRideEvents.contains(dedupeKey)) {
+          return;
+        }
+        _processedRideEvents.add(dedupeKey);
+      }
 
       print('Passenger WS event on user_page: $eventType');
 
@@ -202,21 +223,26 @@ class _UserMapScreenState extends State<UserMapScreen> {
           // tracking page so it can subscribe and receive tracking updates.
           print('✅ Driver accepted ride (user_page) — opening tracking page');
           // Mark transfer so dispose won't close the shared socket.
+          // Transfer ownership of the socket subscription to the tracking page
           _socketTransferred = true;
-          try {
-            _socketSubscription?.cancel();
-          } catch (e) {
-            print('Warning cancelling user_page subscription: $e');
-          }
+          final transferredSubscription = _socketSubscription;
+          // Clear local reference so dispose won't cancel it
           _socketSubscription = null;
 
+          // Logging: transfer prepared
+          try {
+            final ts = DateTime.now().toIso8601String();
+            print('🔁 Transferring passenger WS subscription at $ts');
+          } catch (_) {}
+
           // If a loading screen is on top, pop it first so replacement
-          // correctly shows the tracking page. If not, pushReplacement
-          // will replace the current user page.
+          // correctly shows the tracking page.
           if (Navigator.canPop(context)) {
             Navigator.pop(context);
           }
 
+          // Push the tracking page and pass the existing subscription so the
+          // tracking page can reuse it instead of creating a new listener.
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -227,21 +253,60 @@ class _UserMapScreenState extends State<UserMapScreen> {
                 refreshToken: widget.refreshToken,
                 userData: widget.userData,
                 passengerSocket: _passengerSocket,
+                socketSubscription: transferredSubscription,
               ),
             ),
           );
+
+          try {
+            final ts2 = DateTime.now().toIso8601String();
+            print(
+              '✅ Tracking page opened and subscription transferred at $ts2',
+            );
+          } catch (_) {}
           break;
 
         case 'ride_cancelled':
-          _showErrorSnackBar('Ride was cancelled.');
+          // If a loading screen (RideLoadingScreen) is on top, close it
+          if (Navigator.canPop(context)) {
+            try {
+              Navigator.pop(context);
+            } catch (e) {
+              print('Warning popping loading screen on ride_cancelled: $e');
+            }
+          }
+          final String cancelMsg = data['message'] ?? 'Ride was cancelled.';
+          _showErrorDialog('Ride Cancelled', cancelMsg);
           break;
 
         case 'ride_expired':
-          _showErrorSnackBar('Ride offer expired.');
+          if (Navigator.canPop(context)) {
+            try {
+              Navigator.pop(context);
+            } catch (e) {
+              print('Warning popping loading screen on ride_expired: $e');
+            }
+          }
+          final String expiredMsg =
+              data['message'] ??
+              'No driver accepted the request. Try again later.';
+          _showErrorDialog('Ride Expired', expiredMsg);
           break;
 
         case 'no_drivers_available':
-          _showErrorSnackBar('No drivers available. Try again later.');
+          if (Navigator.canPop(context)) {
+            try {
+              Navigator.pop(context);
+            } catch (e) {
+              print(
+                'Warning popping loading screen on no_drivers_available: $e',
+              );
+            }
+          }
+          final String ndMsg =
+              data['message'] ??
+              'No drivers available nearby. Try again later.';
+          _showErrorDialog('No Drivers Nearby', ndMsg);
           break;
 
         // ============================================================
@@ -268,130 +333,64 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // Handle driver going online/offline
   // ============================================================
   void _handleDriverStatusChanged(Map<String, dynamic> data) {
-    final driverId = data['driver_id'];
+    final driverId = int.tryParse("${data['driver_id']}");
     final status = data['status'];
-    final latitude = data['latitude'];
-    final longitude = data['longitude'];
 
-    print('🚗 Driver $driverId status changed to: $status');
+    if (driverId == null || !mounted) return;
 
-    if (!mounted) return;
+    print("Driver $driverId status changed → $status");
 
-    setState(() {
-      if (status == 'available' && latitude != null && longitude != null) {
-        // Driver went online - check if they're nearby
-        if (_currentPosition != null) {
-          // Calculate distance
-          final distance = _calculateDistance(
-            _currentPosition!.latitude,
-            _currentPosition!.longitude,
-            latitude,
-            longitude,
-          );
-
-          if (distance <= 1500) {
-            // Within 1.5km - add to list if not already there
-            final existingIndex = _nearbyDrivers.indexWhere(
-              (d) => d['driver_id'] == driverId,
-            );
-
-            if (existingIndex == -1) {
-              // Add new driver
-              _nearbyDrivers.add({
-                'driver_id': driverId,
-                'latitude': latitude,
-                'longitude': longitude,
-                'distance_meters': distance,
-              });
-              print('➕ Added driver $driverId to nearby list');
-            }
-          }
-        }
-      } else {
-        // Driver went offline or unavailable - remove from list
+    // Only action needed: remove driver if explicitly offline
+    if (status == "offline") {
+      setState(() {
         _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
-        print('➖ Removed driver $driverId from nearby list');
-      }
-    });
+      });
+    }
   }
 
   // ============================================================
   // Handle driver location update
   // ============================================================
   void _handleDriverLocationUpdated(Map<String, dynamic> data) {
-    final driverId = data['driver_id'];
-    final latitude = data['latitude'];
-    final longitude = data['longitude'];
+    if (!mounted) return;
 
-    if (!mounted || _currentPosition == null) return;
+    final driverId = int.tryParse("${data['driver_id']}");
+    final double? latitude = (data['latitude'] as num?)?.toDouble();
+    final double? longitude = (data['longitude'] as num?)?.toDouble();
 
-    // Calculate new distance
-    final distance = _calculateDistance(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      latitude,
-      longitude,
-    );
+    if (driverId == null || latitude == null || longitude == null) {
+      print("Ignoring invalid location update.");
+      return;
+    }
+
+    final String username = data['username']?.toString() ?? "Driver $driverId";
+    final String vehicleNumber =
+        data['vehicle_number']?.toString() ??
+        data['vehicle_no']?.toString() ??
+        "N/A";
 
     setState(() {
-      final existingIndex = _nearbyDrivers.indexWhere(
+      final index = _nearbyDrivers.indexWhere(
         (d) => d['driver_id'] == driverId,
       );
 
-      if (distance <= 5000) {
-        // Still within range
-        if (existingIndex != -1) {
-          // Update existing driver
-          _nearbyDrivers[existingIndex]['latitude'] = latitude;
-          _nearbyDrivers[existingIndex]['longitude'] = longitude;
-          _nearbyDrivers[existingIndex]['distance_meters'] = distance;
-        } else {
-          // Add new driver
-          _nearbyDrivers.add({
-            'driver_id': driverId,
-            'latitude': latitude,
-            'longitude': longitude,
-            'distance_meters': distance,
-          });
-        }
+      if (index == -1) {
+        // Add new driver
+        _nearbyDrivers.add({
+          'driver_id': driverId,
+          'username': username,
+          'vehicle_number': vehicleNumber,
+          'latitude': latitude,
+          'longitude': longitude,
+        });
       } else {
-        // Moved out of range - remove
-        if (existingIndex != -1) {
-          _nearbyDrivers.removeAt(existingIndex);
-          print('🚗 Driver $driverId moved out of range');
-        }
+        // Update existing
+        _nearbyDrivers[index]['latitude'] = latitude;
+        _nearbyDrivers[index]['longitude'] = longitude;
+        _nearbyDrivers[index]['username'] = username;
+        _nearbyDrivers[index]['vehicle_number'] = vehicleNumber;
       }
     });
-  }
-
-  // ============================================================
-  // Calculate distance between two coordinates (in meters)
-  // ============================================================
-  double _calculateDistance(
-    double lat1,
-    double lon1,
-    double lat2,
-    double lon2,
-  ) {
-    const double earthRadius = 6371000; // meters
-
-    final double dLat = _degreesToRadians(lat2 - lat1);
-    final double dLon = _degreesToRadians(lon2 - lon1);
-
-    final double a =
-        math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_degreesToRadians(lat1)) *
-            math.cos(_degreesToRadians(lat2)) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-
-    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-
-    return earthRadius * c;
-  }
-
-  double _degreesToRadians(double degrees) {
-    return degrees * math.pi / 180;
   }
 
   // ============================================================
@@ -523,6 +522,29 @@ class _UserMapScreenState extends State<UserMapScreen> {
     );
   }
 
+  // Show an AlertDialog for important passenger events (cancel/expired/no drivers)
+  void _showErrorDialog(String title, String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // Show logout confirmation dialog
   void _showLogoutDialog(BuildContext context) {
     showDialog(
@@ -643,6 +665,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.example.demo_apk',
+                        tileProvider: kIsWeb
+                            ? CancellableNetworkTileProvider()
+                            : NetworkTileProvider(),
                       ),
                       MarkerLayer(
                         markers: [
@@ -730,7 +755,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
-                                      '${_nearbyDrivers.length} E-Rickshaw${_nearbyDrivers.length > 1 ? 's' : ''} nearby',
+                                      '${_nearbyDrivers.length} E-Rickshaw${_nearbyDrivers.length > 1 ? 's' : ''} Nearby',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: Colors.green,
@@ -750,21 +775,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
                                               ),
                                         ),
                                       ),
-                                    ] else ...[
-                                      const Icon(
-                                        Icons.access_time,
-                                        color: Colors.green,
-                                        size: 12,
-                                      ),
-                                      const SizedBox(width: 2),
-                                      const Text(
-                                        'Auto-updating',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.green,
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                      ),
                                     ],
                                   ],
                                 ),
@@ -777,7 +787,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                                           bottom: 3,
                                         ),
                                         child: Text(
-                                          '${driver['username']} (${driver['vehicle_number']}) - ${driver['distance_meters'].toStringAsFixed(0)}m',
+                                          '${driver['username']} (${driver['vehicle_number']})',
                                           style: const TextStyle(fontSize: 11),
                                         ),
                                       ),

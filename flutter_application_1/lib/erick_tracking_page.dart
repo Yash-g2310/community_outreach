@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
+import 'erick_driver_page.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -23,6 +26,7 @@ class RideTrackingPage extends StatefulWidget {
   final String? accessToken;
   final bool isDriver; // true if current user is driver, false if passenger
   final dynamic rideSocket; // WebSocket channel for ride group events
+  final StreamSubscription? socketSubscription;
 
   const RideTrackingPage({
     super.key,
@@ -42,6 +46,7 @@ class RideTrackingPage extends StatefulWidget {
     this.accessToken,
     required this.isDriver,
     this.rideSocket,
+    this.socketSubscription,
   });
 
   @override
@@ -107,6 +112,37 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     if (socket == null) return;
 
     // If the caller passed an existing StreamSubscription, reuse it
+    // First, allow an explicit socketSubscription parameter to be reused
+    if (widget.socketSubscription != null) {
+      _wsSubscription = widget.socketSubscription;
+
+      // Reattach this subscription to the tracking page handler so
+      // incoming events are routed here (instead of the previous owner).
+      try {
+        _wsSubscription!.onData(_handleWebSocketMessage);
+        _wsSubscription!.onError((err) {
+          print('❌ Tracking WS Error (transferred): $err');
+        });
+        _wsSubscription!.onDone(() {
+          print('🔌 Tracking WS Closed (transferred)');
+        });
+      } catch (e) {
+        print('Warning: failed to reattach transferred subscription: $e');
+      }
+
+      // Also attempt to send start_tracking using the socket object if available
+      try {
+        final sink = socket.sink;
+        sink.add(
+          json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
+        );
+      } catch (e) {
+        // Not fatal
+      }
+
+      return;
+    }
+
     if (socket is StreamSubscription) {
       _wsSubscription = socket;
       return;
@@ -168,33 +204,112 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           setState(() {
             _rideStatus = 'cancelled';
           });
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(data['message'] ?? 'Ride cancelled'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) {
-              Navigator.pop(context);
-            }
-          });
+
+          // If this tracking page is shown to a driver, show a modal dialog
+          // and then return to the driver's map screen. For passengers keep
+          // the existing snackbar + pop behavior.
+          final msg = data['message'] ?? 'Ride cancelled';
+          if (widget.isDriver) {
+            if (!mounted) return;
+            showDialog(
+              context: context,
+              barrierDismissible: true,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Ride Cancelled'),
+                content: Text(msg),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            ).then((_) async {
+              if (!mounted) return;
+
+              // Best-effort: tell server we stopped tracking
+              try {
+                final sink = widget.rideSocket?.sink;
+                sink?.add(
+                  json.encode({
+                    'type': 'stop_tracking',
+                    'ride_id': widget.rideId,
+                  }),
+                );
+              } catch (_) {}
+
+              // Cancel local subscription and navigate back to driver map
+              try {
+                _wsSubscription?.cancel();
+              } catch (_) {}
+
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      DriverPage(jwtToken: widget.accessToken),
+                ),
+              );
+            });
+          } else {
+            messenger.showSnackBar(
+              SnackBar(content: Text(msg), backgroundColor: Colors.orange),
+            );
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) {
+                Navigator.pop(context);
+              }
+            });
+          }
+
           break;
         case 'ride_completed':
           setState(() {
             _rideStatus = 'completed';
           });
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text('Ride completed!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) {
-              Navigator.pop(context);
-            }
-          });
+
+          // For drivers and passengers navigate back to their respective
+          // map screens. Use a modal for passengers (already handled in
+          // UserTrackingPage) — here we replace the current route with
+          // the driver map when this page is used by a driver.
+          if (widget.isDriver) {
+            if (!mounted) return;
+
+            // Best-effort: stop tracking
+            try {
+              final sink = widget.rideSocket?.sink;
+              sink?.add(
+                json.encode({
+                  'type': 'stop_tracking',
+                  'ride_id': widget.rideId,
+                }),
+              );
+            } catch (_) {}
+
+            try {
+              _wsSubscription?.cancel();
+            } catch (_) {}
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              ),
+            );
+          } else {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Ride completed!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) {
+                Navigator.pop(context);
+              }
+            });
+          }
+
           break;
         default:
         // Ignore other events
@@ -234,11 +349,33 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           ),
         );
 
-        // Navigate back after a short delay
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
+        // Navigate back after a short delay. For drivers replace route
+        // with the main driver map; for passengers just pop.
+        Future.delayed(const Duration(seconds: 2), () async {
+          if (!mounted) return;
+
+          // Best-effort: stop tracking
+          try {
+            final sink = widget.rideSocket?.sink;
+            sink?.add(
+              json.encode({'type': 'stop_tracking', 'ride_id': widget.rideId}),
+            );
+          } catch (_) {}
+
+          try {
+            _wsSubscription?.cancel();
+          } catch (_) {}
+
+          if (widget.isDriver) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              ),
+            );
+          } else {
             debugPrint('🟠 Ride completed — returning to previous page...');
-            Navigator.pop(context); // ✅ Just go back one page
+            Navigator.pop(context);
           }
         });
       } else {
@@ -333,10 +470,33 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         );
 
         // ⏳ Navigate back to notifications after short delay
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            debugPrint('🟠 Ride cancelled — returning to previous page...');
-            Navigator.pop(context); // ✅ Just go back one page
+        Future.delayed(const Duration(seconds: 2), () async {
+          if (!mounted) return;
+
+          // Best-effort: stop tracking
+          try {
+            final sink = widget.rideSocket?.sink;
+            sink?.add(
+              json.encode({'type': 'stop_tracking', 'ride_id': widget.rideId}),
+            );
+          } catch (_) {}
+
+          try {
+            _wsSubscription?.cancel();
+          } catch (_) {}
+
+          if (widget.isDriver) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              ),
+            );
+          } else {
+            if (mounted) {
+              debugPrint('🟠 Ride cancelled — returning to previous page...');
+              Navigator.pop(context); // ✅ Just go back one page
+            }
           }
         });
       } else {
@@ -539,6 +699,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.example.erick_app',
+                        tileProvider: kIsWeb
+                            ? CancellableNetworkTileProvider()
+                            : NetworkTileProvider(),
                       ),
                       MarkerLayer(
                         markers: [

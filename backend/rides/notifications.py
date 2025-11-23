@@ -5,10 +5,13 @@ from __future__ import annotations
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.utils import timezone
+import logging
 
 from .models import DriverProfile, RideOffer, RideRequest
 from .serializers import RideRequestSerializer
 from .utils import calculate_distance
+
+logger = logging.getLogger(__name__)
 
 
 def build_offers_for_ride(ride: RideRequest) -> list[RideOffer]:
@@ -96,14 +99,13 @@ def dispatch_next_offer(ride: RideRequest) -> bool:
     payload = RideRequestSerializer(ride).data
 
     # 5. Send to the driver's personal group
-    async_to_sync(channel_layer.group_send)(
-        f"driver_{offer.driver_id}",
-        {
-            "type": "ride_offer",      # triggers ride_offer() handler in AppConsumer
-            "ride_data": payload,
-            "offer_id": offer.id,
-        }
-    )
+    send_payload = {
+        "type": "ride_offer",      # triggers ride_offer() handler in AppConsumer
+        "ride_data": payload,
+        "offer_id": offer.id,
+    }
+    logger.debug("WS -> driver_%s: %s", offer.driver_id, send_payload)
+    async_to_sync(channel_layer.group_send)(f"driver_{offer.driver_id}", send_payload)
 
     return True
 
@@ -126,15 +128,14 @@ def expire_offer_and_dispatch(offer: RideOffer) -> bool:
     if channel_layer is None:
         return False
 
-    # 2. Notify THIS driver that their offer expired
-    async_to_sync(channel_layer.group_send)(
-        f"driver_{offer.driver_id}",
-        {
-            "type": "ride_expired",         # -> AppConsumer.ride_expired()
-            "ride_id": offer.ride_id,
-            "message": "Your ride offer has timed out.",
-        }
-    )
+    # 2. Notify DRIVER that their offer expired
+    expired_payload = {
+        "type": "ride_expired",         # -> AppConsumer.ride_expired()
+        "ride_id": offer.ride_id,
+        "message": "Your ride offer has timed out.",
+    }
+    logger.debug("WS -> driver_%s: %s", offer.driver_id, expired_payload)
+    async_to_sync(channel_layer.group_send)(f"driver_{offer.driver_id}", expired_payload)
 
     # 3. Attempt to send the next pending offer
     dispatched = dispatch_next_offer(offer.ride)
@@ -147,15 +148,16 @@ def expire_offer_and_dispatch(offer: RideOffer) -> bool:
         offer.ride.status = "no_drivers"
         offer.ride.save(update_fields=["status"])
 
-        # Notify passenger
-        async_to_sync(channel_layer.group_send)(
-            f"user_{offer.ride.passenger_id}",
-            {
-                "type": "no_drivers_available",   # -> AppConsumer.no_drivers_available()
-                "ride_id": offer.ride_id,
-                "message": "No drivers accepted your ride request. Please try again later.",
-            }
-        )
+        # Notify PASSENGER that no drivers have accepted their ride request
+        # This path occurs after offers were created and dispatched but none accepted.
+        # Send 'ride_expired' to passenger to indicate the sequential-offers flow failed.
+        passenger_expired_payload = {
+            "type": "ride_expired",   # -> AppConsumer.ride_expired() for passenger
+            "ride_id": offer.ride_id,
+            "message": "No drivers accepted your ride request. Please try again later.",
+        }
+        logger.debug("WS -> user_%s: %s", offer.ride.passenger_id, passenger_expired_payload)
+        async_to_sync(channel_layer.group_send)(f"user_{offer.ride.passenger_id}", passenger_expired_payload)
 
     return dispatched
 
@@ -190,10 +192,8 @@ def notify_driver_event(event_type: str, ride: RideRequest, driver_id: int | Non
         payload["message"] = message
 
     # Send directly to this driver
-    async_to_sync(channel_layer.group_send)(
-        f"driver_{driver_id}",
-        payload
-    )
+    logger.debug("WS -> driver_%s: %s", driver_id, payload)
+    async_to_sync(channel_layer.group_send)(f"driver_{driver_id}", payload)
 
     return True
 
@@ -228,9 +228,7 @@ def notify_passenger_event(event_type: str, ride: RideRequest, message: str = ""
     if message:
         payload["message"] = message
 
-    async_to_sync(channel_layer.group_send)(
-        f"user_{passenger_id}",          # unified group name
-        payload
-    )
+    logger.debug("WS -> user_%s: %s", passenger_id, payload)
+    async_to_sync(channel_layer.group_send)(f"user_{passenger_id}", payload)
 
     return True
