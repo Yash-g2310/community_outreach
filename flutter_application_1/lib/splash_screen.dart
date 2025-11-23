@@ -60,7 +60,7 @@ class StepRewardPage extends StatelessWidget {
               child: Column(
                 children: [
                   Text(
-                    "Earn rewards for every step you take.",
+                    "Earn rewards for every ride you take.",
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 22,
@@ -88,10 +88,6 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: ElevatedButton(
                         onPressed: () {
-                          print('=== NAVIGATION ===');
-                          print('Navigating from Start Page to Login Page');
-                          print('==================');
-
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -123,10 +119,6 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: OutlinedButton(
                         onPressed: () {
-                          print('=== NAVIGATION ===');
-                          print('Navigating from Start Page to Sign Up Page');
-                          print('==================');
-
                           Navigator.push(
                             context,
                             MaterialPageRoute(

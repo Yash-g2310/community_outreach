@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
 import 'erick_driver_page.dart';
+import 'constants.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -24,7 +25,7 @@ class RideTrackingPage extends StatefulWidget {
   final double? dropoffLat;
   final double? dropoffLng;
   final String? accessToken;
-  final bool isDriver; // true if current user is driver, false if passenger
+  final bool isDriver;
   final dynamic rideSocket; // WebSocket channel for ride group events
   final StreamSubscription? socketSubscription;
 
@@ -60,8 +61,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   Timer? _locationTimer;
   StreamSubscription? _wsSubscription;
 
-  // API Configuration
-  static const String baseUrl = 'http://localhost:8000';
+  // API Configuration uses centralized base URL from constants
 
   @override
   void initState() {
@@ -96,86 +96,51 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     }
   }
 
+  // Location updates only, ride status handled by WebSocket
   void _startLocationUpdates() {
     _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       _getCurrentLocation();
-      // Location updates only, ride status handled by WebSocket
     });
   }
 
   // Listen for WebSocket ride tracking events
   void _listenForRideTrackingEvents() {
-    // Prevent double-listening
+    // If already listening, don't attach again
     if (_wsSubscription != null) return;
 
     final socket = widget.rideSocket;
     if (socket == null) return;
 
-    // If the caller passed an existing StreamSubscription, reuse it
-    // First, allow an explicit socketSubscription parameter to be reused
-    if (widget.socketSubscription != null) {
-      _wsSubscription = widget.socketSubscription;
-
-      // Reattach this subscription to the tracking page handler so
-      // incoming events are routed here (instead of the previous owner).
-      try {
-        _wsSubscription!.onData(_handleWebSocketMessage);
-        _wsSubscription!.onError((err) {
-          print('❌ Tracking WS Error (transferred): $err');
-        });
-        _wsSubscription!.onDone(() {
-          print('🔌 Tracking WS Closed (transferred)');
-        });
-      } catch (e) {
-        print('Warning: failed to reattach transferred subscription: $e');
-      }
-
-      // Also attempt to send start_tracking using the socket object if available
-      try {
-        final sink = socket.sink;
-        sink.add(
-          json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
-        );
-      } catch (e) {
-        // Not fatal
-      }
-
-      return;
-    }
-
-    if (socket is StreamSubscription) {
-      _wsSubscription = socket;
-      return;
-    }
-
-    // Otherwise try to subscribe to a stream exposed by the socket-like object
+    // Always listen fresh — do NOT steal the driver map subscription
     try {
       final stream = socket.stream;
       if (stream is Stream) {
         _wsSubscription = stream.listen(
           _handleWebSocketMessage,
           onError: (err) {
-            print('❌ Tracking WS Error: $err');
+            print('Tracking WS Error: $err');
           },
           onDone: () {
-            print('🔌 Tracking WS Closed');
+            print('Tracking WS Closed (listener ended)');
           },
           cancelOnError: false,
         );
 
-        // If the socket exposes a sink, send the start_tracking command
-        try {
-          // Client (driver) sends start_tracking msg to server
-          final sink = socket.sink;
-          sink.add(
-            json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
-          );
-        } catch (e) {
-          // Not fatal — some callers may pass only a subscription
-        }
+        print("TrackingPage: Started listening to WS stream");
       }
     } catch (e) {
-      print('Ride tracking socket does not expose a stream: $e');
+      print("TrackingPage: Unable to listen to WebSocket stream: $e");
+      return;
+    }
+
+    // Send start_tracking command (but do NOT take ownership of socket)
+    try {
+      final sink = socket.sink;
+      sink.add(
+        json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
+      );
+    } catch (e) {
+      print("TrackingPage: Error sending start_tracking: $e");
     }
   }
 
@@ -199,70 +164,44 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
             });
           }
           break;
+
+        // ----------------- RIDE CANCELLED -----------------
         case 'ride_cancelled':
-        case 'ride_expired':
           setState(() {
             _rideStatus = 'cancelled';
           });
 
-          // If this tracking page is shown to a driver, show a modal dialog
-          // and then return to the driver's map screen. For passengers keep
-          // the existing snackbar + pop behavior.
-          final msg = data['message'] ?? 'Ride cancelled';
-          if (widget.isDriver) {
-            if (!mounted) return;
-            showDialog(
-              context: context,
-              barrierDismissible: true,
-              builder: (ctx) => AlertDialog(
-                title: const Text('Ride Cancelled'),
-                content: Text(msg),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('OK'),
-                  ),
-                ],
-              ),
-            ).then((_) async {
-              if (!mounted) return;
+          final cancelMsg = data['message'] ?? 'Ride cancelled';
 
-              // Best-effort: tell server we stopped tracking
-              try {
-                final sink = widget.rideSocket?.sink;
-                sink?.add(
-                  json.encode({
-                    'type': 'stop_tracking',
-                    'ride_id': widget.rideId,
-                  }),
-                );
-              } catch (_) {}
+          messenger.showSnackBar(
+            SnackBar(backgroundColor: Colors.orange, content: Text(cancelMsg)),
+          );
 
-              // Cancel local subscription and navigate back to driver map
-              try {
-                _wsSubscription?.cancel();
-              } catch (_) {}
-
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      DriverPage(jwtToken: widget.accessToken),
-                ),
-              );
-            });
-          } else {
-            messenger.showSnackBar(
-              SnackBar(content: Text(msg), backgroundColor: Colors.orange),
-            );
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) {
-                Navigator.pop(context);
-              }
-            });
-          }
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) Navigator.pop(context);
+          });
 
           break;
+
+        // ----------------- RIDE EXPIRED -----------------
+        case 'ride_expired':
+          setState(() {
+            _rideStatus = 'expired';
+          });
+
+          final expireMsg = data['message'] ?? 'Ride offer expired';
+
+          // Snackbar only
+          messenger.showSnackBar(
+            SnackBar(backgroundColor: Colors.red, content: Text(expireMsg)),
+          );
+
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) Navigator.pop(context);
+          });
+
+          break;
+
         case 'ride_completed':
           setState(() {
             _rideStatus = 'completed';
@@ -311,6 +250,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           }
 
           break;
+
         default:
         // Ignore other events
       }
@@ -328,7 +268,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/handle/${widget.rideId}/complete/'),
+        Uri.parse('$kBaseUrl/api/rides/handle/${widget.rideId}/complete/'),
         headers: {
           'Authorization': 'Bearer ${widget.accessToken}',
           'Content-Type': 'application/json',
@@ -374,7 +314,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
               ),
             );
           } else {
-            debugPrint('🟠 Ride completed — returning to previous page...');
+            debugPrint('Ride completed — returning to previous page...');
             Navigator.pop(context);
           }
         });
@@ -425,7 +365,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
     // If the user chooses "No", stay on the same page
     if (shouldCancel != true) {
-      debugPrint('❌ Ride cancellation aborted by user.');
+      debugPrint('Ride cancellation aborted by user.');
       return;
     }
 
@@ -434,15 +374,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     });
 
     try {
-      // ✅ Correct endpoint (adjusted to match your Django URLs)
-      final endpoint = widget.isDriver
-          ? '/api/rides/handle/${widget.rideId}/driver-cancel/'
-          : '/api/rides/handle/${widget.rideId}/passenger-cancel/';
+      // Correct endpoint (adjusted to match your Django URLs)
+      final endpoint = '/api/rides/handle/${widget.rideId}/driver-cancel/';
 
-      debugPrint('🛰️ Sending cancel request to: $baseUrl$endpoint');
+      debugPrint('Sending cancel request to: $kBaseUrl$endpoint');
 
       final response = await http.post(
-        Uri.parse('$baseUrl$endpoint'),
+        Uri.parse('$kBaseUrl$endpoint'),
         headers: {
           'Authorization': 'Bearer ${widget.accessToken}',
           'Content-Type': 'application/json',
@@ -450,13 +388,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       );
 
       // 🧾 Print the raw response for debugging
-      debugPrint('🔍 Cancel Ride Response Code: ${response.statusCode}');
-      debugPrint('🔍 Cancel Ride Response Body: ${response.body}');
+      debugPrint('Cancel Ride Response Code: ${response.statusCode}');
+      debugPrint('Cancel Ride Response Body: ${response.body}');
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        debugPrint('✅ Ride cancelled successfully.');
+        debugPrint('Ride cancelled successfully.');
 
         setState(() {
           _rideStatus = 'cancelled';
@@ -494,19 +432,19 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
             );
           } else {
             if (mounted) {
-              debugPrint('🟠 Ride cancelled — returning to previous page...');
-              Navigator.pop(context); // ✅ Just go back one page
+              debugPrint('Ride cancelled — returning to previous page...');
+              Navigator.pop(context); // Just go back one page
             }
           }
         });
       } else {
-        // ❌ Non-success status code — log details
+        // Non-success status code — log details
         throw Exception(
           'Failed to cancel ride: ${response.statusCode} | ${response.body}',
         );
       }
     } catch (e) {
-      debugPrint('💥 Error cancelling ride: $e');
+      debugPrint('Error cancelling ride: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -875,29 +813,4 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
             ),
     );
   }
-}
-
-void main() {
-  runApp(
-    const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: RideTrackingPage(
-        rideId: 1,
-        pickupAddress: "Connaught Place, Delhi",
-        dropoffAddress: "Noida Sector 62",
-        numberOfPassengers: 2,
-        passengerName: "Yash",
-        passengerPhone: "9876543210",
-        driverName: "Apurv",
-        driverPhone: "9999999999",
-        vehicleNumber: "DL01AB1234",
-        pickupLat: 28.6149,
-        pickupLng: 77.2090,
-        dropoffLat: 28.6200,
-        dropoffLng: 77.3700,
-        accessToken: "dummy_token",
-        isDriver: true,
-      ),
-    ),
-  );
 }

@@ -8,7 +8,10 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
 import 'dart:async';
-import 'profile.dart';
+import 'constants.dart';
+import 'ws_utils.dart';
+import 'profile_page.dart';
+import 'utils/string_utils.dart';
 import 'previous_rides.dart';
 import 'utils/socket_channel_factory.dart';
 import 'package:flutter_application_1/user_tracking_page.dart';
@@ -71,8 +74,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   final TextEditingController _dropController = TextEditingController();
   final TextEditingController _passengerController = TextEditingController();
 
-  // API Configuration
-  static const String baseUrl = 'http://localhost:8000';
+  // API Configuration uses centralized base URL from constants
 
   // Helper method to truncate coordinates to 6 decimal places
   double _truncateCoordinate(double coordinate) {
@@ -139,12 +141,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   void _connectPassengerSocket() {
     try {
-      final uri = Uri(
-        scheme: 'ws',
-        host: '127.0.0.1',
-        port: 8000,
-        path: '/ws/app/',
-        queryParameters: {
+      // Build websocket Uri from centralized base
+      final uri = buildWsUri(
+        '/ws/app/',
+        queryParams: {
           if (widget.jwtToken?.isNotEmpty ?? false) 'token': widget.jwtToken!,
           if (widget.sessionId?.isNotEmpty ?? false)
             'sessionid': widget.sessionId!,
@@ -155,7 +155,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       _passengerSocket = createPlatformWebSocket(uri);
 
-      print('✅ Passenger WebSocket connected: $uri (user_page)');
+      print('Passenger WebSocket connected: $uri (user_page)');
 
       if (_currentPosition != null) {
         _passengerSocket!.sink.add(
@@ -166,9 +166,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
             "radius": 1500, // or whatever radius you use
           }),
         );
-        print("📡 Sent Websocket for Nearby Drivers to backend");
+        print("Sent Websocket for Nearby Drivers to backend");
       } else {
-        print("⚠️ Cannot subscribe_nearby — currentPosition is null");
+        print("Cannot subscribe_nearby — currentPosition is null");
       }
 
       _socketSubscription = _passengerSocket!.stream.listen(
@@ -179,20 +179,20 @@ class _UserMapScreenState extends State<UserMapScreen> {
           _handlePassengerSocketMessage(message);
         },
         onError: (error) {
-          print('⚠️ Passenger WebSocket error: $error');
+          print('Passenger WebSocket error: $error');
         },
         onDone: () {
-          print('🔌 Passenger WebSocket connection closed');
+          print('Passenger WebSocket connection closed');
         },
       );
 
       // Logging: subscription created
       try {
         final ts = DateTime.now().toIso8601String();
-        print('📡 Passenger WS subscription created at $ts');
+        print('Passenger WS subscription created at $ts');
       } catch (_) {}
     } catch (e) {
-      print('❌ Failed to connect passenger WebSocket: $e');
+      print('Failed to connect passenger WebSocket: $e');
     }
   }
 
@@ -221,7 +221,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         case 'ride_accepted':
           // Driver accepted the ride. Transfer socket ownership to the
           // tracking page so it can subscribe and receive tracking updates.
-          print('✅ Driver accepted ride (user_page) — opening tracking page');
+          print('Driver accepted ride (user_page) — opening tracking page');
           // Mark transfer so dispose won't close the shared socket.
           // Transfer ownership of the socket subscription to the tracking page
           _socketTransferred = true;
@@ -232,7 +232,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
           // Logging: transfer prepared
           try {
             final ts = DateTime.now().toIso8601String();
-            print('🔁 Transferring passenger WS subscription at $ts');
+            print('Transferring passenger WS subscription at $ts');
           } catch (_) {}
 
           // If a loading screen is on top, pop it first so replacement
@@ -260,9 +260,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
           try {
             final ts2 = DateTime.now().toIso8601String();
-            print(
-              '✅ Tracking page opened and subscription transferred at $ts2',
-            );
+            print('Tracking page opened and subscription transferred at $ts2');
           } catch (_) {}
           break;
 
@@ -322,10 +320,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         default:
-          print('⚠️ Unhandled passenger WS event: $eventType');
+          print('Unhandled passenger WS event: $eventType');
       }
     } catch (e) {
-      print('⚠️ Error parsing passenger WebSocket message: $e');
+      print('Error parsing passenger WebSocket message: $e');
     }
   }
 
@@ -442,12 +440,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
         'number_of_passengers': passengers,
       };
 
-      print('=== RIDE REQUEST ===');
       print('Creating ride request: $rideData');
-      print('==================');
 
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/passenger/request/'),
+        Uri.parse('$kBaseUrl/api/rides/passenger/request/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -562,9 +558,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             ),
             TextButton(
               onPressed: () {
-                print('=== LOGOUT ===');
-                print('User logged out');
-                print('==============');
+                print('User Logged out');
 
                 Navigator.of(context).pop(); // Close dialog
 
@@ -630,8 +624,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) =>
-                        PreviousRidesPage(jwtToken: widget.jwtToken!),
+                    builder: (context) => PreviousRidesPage(
+                      jwtToken: widget.jwtToken!,
+                      isDriver: false,
+                    ),
                   ),
                 );
               }

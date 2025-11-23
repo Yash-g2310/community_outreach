@@ -18,7 +18,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat(); // 🔁 infinite rotation
+    )..repeat(); // Infinite rotation
   }
 
   @override
@@ -32,13 +32,13 @@ class _LoadingOverlayState extends State<LoadingOverlay>
     return Scaffold(
       body: Stack(
         children: [
-          // 🔹 blurred background
+          // blurred background
           BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: Container(color: Colors.black.withValues(alpha: 0.3)),
           ),
 
-          // 🔹 loading card
+          // loading card
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(

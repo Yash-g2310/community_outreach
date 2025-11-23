@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'constants.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'erick_driver_page.dart';
@@ -34,7 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   static const bool _enableLoginDebugLogs = true;
 
-  static const String _loginEndpoint = 'http://localhost:8000/api/auth/login/';
+  static final String _loginEndpoint = '$kBaseUrl/api/auth/login/';
 
   // Text controllers for login form
   final TextEditingController _usernameController = TextEditingController();
@@ -97,7 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final requestId = DateTime.now().millisecondsSinceEpoch;
     final stopwatch = Stopwatch()..start();
     _logLogin(
-      '($requestId) LOGIN REQUEST :: username=$username endpoint=$_loginEndpoint',
+      '($requestId) Login Request :: username=$username endpoint=$_loginEndpoint',
     );
 
     try {
@@ -108,10 +109,8 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       stopwatch.stop();
-      _logLogin(
-        '($requestId) API RESPONSE :: status=${response.statusCode} duration=${stopwatch.elapsedMilliseconds}ms',
-      );
-      _logLogin('($requestId) Body=${response.body}', tag: 'LOGIN_HTTP');
+      _logLogin('($requestId) API Response :: status=${response.statusCode}');
+      _logLogin('($requestId) Body=${response.body}', tag: 'Login_HTTP');
 
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
@@ -132,14 +131,14 @@ class _LoginScreenState extends State<LoginScreen> {
             ? '${accessToken.substring(0, 16)}...'
             : accessToken;
         _logLogin(
-          '($requestId) LOGIN SUCCESS :: role=$userRole user=$userName email=$userEmail accessPreview=$tokenPreview',
+          '($requestId) Login Success :: role=$userRole user=$userName accessPreview=$tokenPreview',
         );
 
         // Show success message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Welcome back, $userName!'),
+              content: Text('Welcome Back, $userName!'),
               backgroundColor: Colors.green,
             ),
           );
@@ -160,15 +159,15 @@ class _LoginScreenState extends State<LoginScreen> {
         final errorMessage = responseData['error'] ?? 'Login failed';
 
         _logLogin(
-          '($requestId) LOGIN FAILED :: $errorMessage',
-          tag: 'LOGIN_FAIL',
+          '($requestId) Login Failed :: $errorMessage',
+          tag: 'Login_Failure',
         );
 
         throw Exception(errorMessage);
       }
     } catch (error, stackTrace) {
-      _logLogin('($requestId) API ERROR :: ${error.runtimeType} -> $error');
-      _logLogin(stackTrace.toString(), tag: 'LOGIN_STACK');
+      _logLogin('($requestId) API Error :: ${error.runtimeType} -> $error');
+      _logLogin(stackTrace.toString(), tag: 'Login_StackTrace');
 
       // Re-throw with user-friendly message
       if (error.toString().contains('Connection refused') ||
@@ -184,7 +183,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // Navigate to signup page
   void _navigateToSignup() {
-    _logLogin('Navigating to Sign Up Page', tag: 'NAVIGATION');
+    _logLogin('Navigating to Sign Up Page', tag: 'Navigation');
 
     Navigator.push(
       context,
@@ -202,8 +201,8 @@ class _LoginScreenState extends State<LoginScreen> {
     Map<String, dynamic>? rawUserData,
   }) {
     _logLogin(
-      'Navigating -> ${role.toUpperCase()} (user=$userName, email=${userEmail ?? 'n/a'})',
-      tag: 'NAVIGATION',
+      'Navigating -> ${role.toUpperCase()} (user=$userName, email=${userEmail ?? 'N/A'})',
+      tag: 'Navigation',
     );
 
     Widget destinationPage;
@@ -259,9 +258,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new, size: 20),
                     onPressed: () {
-                      print('=== NAVIGATION ===');
-                      print('Going back from Login Page to Start Page');
-                      print('==================');
                       Navigator.pop(context);
                     },
                   ),
@@ -276,7 +272,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Wrap(
                     children: [
                       Text(
-                        "By logging in, you agree to our ",
+                        "By Logging In, You Agree to Our ",
                         style: TextStyle(fontSize: 14, color: Colors.black54),
                       ),
                       Text(
@@ -301,7 +297,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextField(
                     controller: _usernameController,
                     decoration: InputDecoration(
-                      hintText: "Enter your username",
+                      hintText: "Enter your Username",
                       hintStyle: const TextStyle(color: Colors.black38),
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -332,7 +328,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     controller: _passwordController,
                     obscureText: true,
                     decoration: InputDecoration(
-                      hintText: "Enter your password",
+                      hintText: "Enter your Password",
                       hintStyle: const TextStyle(color: Colors.black38),
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16,

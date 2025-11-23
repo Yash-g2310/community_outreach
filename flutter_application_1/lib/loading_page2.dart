@@ -30,7 +30,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
   void initState() {
     super.initState();
 
-    // 🔁 start spinner animation
+    // Start spinner animation
     _rotationController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -48,7 +48,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
   }
 
   // ============================================================
-  // 🖼️ UI
+  // UI
   // ============================================================
   @override
   Widget build(BuildContext context) {
@@ -100,7 +100,6 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
                     child: OutlinedButton(
                       onPressed: () {
                         // UI-only cancel: simply navigate back to the map screen.
-                        print('=== CANCEL BUTTON PRESSED (UI) ===');
                         Navigator.of(context).pushReplacement(
                           MaterialPageRoute(
                             builder: (context) => UserMapScreen(

@@ -10,10 +10,12 @@ import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_ti
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'profile.dart';
+import 'profile_page.dart';
 import 'erick_tracking_page.dart';
 import 'previous_rides.dart';
 import 'utils/socket_channel_factory.dart';
+import 'constants.dart';
+import 'ws_utils.dart';
 
 void main() {
   runApp(const ERickDriverApp());
@@ -54,7 +56,7 @@ class DriverPage extends StatefulWidget {
   State<DriverPage> createState() => _DriverPageState();
 }
 
-class _DriverPageState extends State<DriverPage> {
+class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
   bool isActive = true;
   bool isLoading = false;
   String? errorMessage;
@@ -63,8 +65,7 @@ class _DriverPageState extends State<DriverPage> {
   Position? _currentPosition;
   LatLng? _mapPosition; // For displaying on map
 
-  // API Configuration
-  static const String baseUrl = 'http://localhost:8000';
+  // API Configuration uses centralized base URL from constants
 
   List<Map<String, dynamic>> notifications = [];
   Set<int> _rejectedRideIds = {}; // Local storage for rejected ride IDs
@@ -78,6 +79,7 @@ class _DriverPageState extends State<DriverPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadRejectedRides(); // Load rejected rides from local storage
     _loadDriverData();
     _initializeLocation();
@@ -86,8 +88,13 @@ class _DriverPageState extends State<DriverPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _shouldMaintainSocket = false;
     _socketReconnectTimer?.cancel();
+
+    // Ensure server marks driver offline when the app/widget is disposed
+    _sendDriverOfflineSilently();
+
     if (!_socketTransferred) {
       _cancelDriverSocket();
     } else {
@@ -98,6 +105,20 @@ class _DriverPageState extends State<DriverPage> {
     }
     _locationUpdateTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _logSocket('App lifecycle changed: $state');
+    // When the app is detached (closing) or paused (sent to background/home), mark driver offline
+    if (state == AppLifecycleState.detached ||
+        state == AppLifecycleState.paused) {
+      _shouldMaintainSocket = false;
+      try {
+        _updateDriverStatus(false);
+      } catch (_) {}
+      _cancelDriverSocket();
+    }
   }
 
   Future<void> _initializeLocation() async {
@@ -134,7 +155,7 @@ class _DriverPageState extends State<DriverPage> {
       _currentPosition = position;
 
       // Update map position
-      setState(() {
+      _safeSetState(() {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
@@ -174,29 +195,7 @@ class _DriverPageState extends State<DriverPage> {
       (widget.jwtToken?.isNotEmpty ?? false) ||
       (widget.sessionId?.isNotEmpty ?? false);
 
-  String get _driverSocketUrl {
-    final sanitizedBase = baseUrl.replaceFirst(RegExp(r'^https?://'), '');
-    final scheme = baseUrl.startsWith('https') ? 'wss://' : 'ws://';
-
-    final uri = Uri.parse('$scheme$sanitizedBase/ws/app/');
-
-    final queryParams = <String, String>{};
-
-    // mobile app – JWT token
-    if (widget.jwtToken?.isNotEmpty ?? false) {
-      queryParams['token'] = widget.jwtToken!;
-    }
-
-    // chrome testing – sessionid + csrftoken
-    if (widget.sessionId?.isNotEmpty ?? false) {
-      queryParams['sessionid'] = widget.sessionId!;
-    }
-    if (widget.csrfToken?.isNotEmpty ?? false) {
-      queryParams['csrftoken'] = widget.csrfToken!;
-    }
-
-    return uri.replace(queryParameters: queryParams).toString();
-  }
+  // Driver socket URI is constructed when connecting using `buildWsUri`.
 
   String _buildCookieHeader() {
     final cookies = <String>[];
@@ -235,11 +234,23 @@ class _DriverPageState extends State<DriverPage> {
       headers['Cookie'] = cookieHeader;
     }
 
-    _logSocket('Connecting to $_driverSocketUrl (retry=$isReconnect)');
+    _logSocket('Connecting to driver WebSocket (retry=$isReconnect)');
 
     try {
+      final queryParams = <String, String>{};
+      if (widget.jwtToken?.isNotEmpty ?? false) {
+        queryParams['token'] = widget.jwtToken!;
+      }
+      if (widget.sessionId?.isNotEmpty ?? false) {
+        queryParams['sessionid'] = widget.sessionId!;
+      }
+      if (widget.csrfToken?.isNotEmpty ?? false) {
+        queryParams['csrftoken'] = widget.csrfToken!;
+      }
+
+      final uri = buildWsUri('/ws/app/', queryParams: queryParams);
       final channel = createPlatformWebSocket(
-        Uri.parse(_driverSocketUrl),
+        uri,
         headers: headers.isEmpty ? null : headers,
       );
 
@@ -538,13 +549,13 @@ class _DriverPageState extends State<DriverPage> {
 
   Future<void> _loadDriverData() async {
     if (widget.jwtToken == null) {
-      setState(() {
+      _safeSetState(() {
         errorMessage = 'No authentication token found';
       });
       return;
     }
 
-    setState(() {
+    _safeSetState(() {
       isLoading = true;
       errorMessage = null;
     });
@@ -577,7 +588,7 @@ class _DriverPageState extends State<DriverPage> {
       final rejectedList =
           prefs.getStringList('rejected_rides_$driverId') ?? [];
 
-      setState(() {
+      _safeSetState(() {
         _rejectedRideIds = rejectedList
             .map((id) => int.tryParse(id))
             .where((id) => id != null)
@@ -590,7 +601,7 @@ class _DriverPageState extends State<DriverPage> {
       );
     } catch (e) {
       print('Error loading rejected rides: $e');
-      setState(() {
+      _safeSetState(() {
         _rejectedRideIds = {};
       });
     }
@@ -612,7 +623,7 @@ class _DriverPageState extends State<DriverPage> {
 
   // Add a ride ID to rejected list
   Future<void> _addRejectedRide(int rideId) async {
-    setState(() {
+    _safeSetState(() {
       _rejectedRideIds.add(rideId);
     });
     await _saveRejectedRides();
@@ -624,7 +635,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _fetchDriverProfile() async {
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/rides/driver/profile/'),
+        Uri.parse('$kBaseUrl/api/rides/driver/profile/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -633,7 +644,7 @@ class _DriverPageState extends State<DriverPage> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        setState(() {
+        _safeSetState(() {
           driverProfile = data;
           // Update isActive based on driver status
           isActive = data['status'] == 'available';
@@ -652,7 +663,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _updateDriverStatus(bool active) async {
     if (widget.jwtToken == null) return;
 
-    setState(() {
+    _safeSetState(() {
       isLoading = true;
     });
 
@@ -667,7 +678,7 @@ class _DriverPageState extends State<DriverPage> {
       double? longitude = _currentPosition?.longitude;
 
       final response = await http.patch(
-        Uri.parse('$baseUrl/api/rides/driver/status/'),
+        Uri.parse('$kBaseUrl/api/rides/driver/status/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -721,13 +732,13 @@ class _DriverPageState extends State<DriverPage> {
 
     final rideId = notification['id'] as int;
 
-    setState(() {
+    _safeSetState(() {
       isLoading = true;
     });
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/rides/handle/$rideId/accept/'),
+        Uri.parse('$kBaseUrl/api/rides/handle/$rideId/accept/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -799,7 +810,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _rejectRide(int rideId) async {
     if (widget.jwtToken == null) return;
 
-    setState(() {
+    _safeSetState(() {
       isLoading = true;
     });
 
@@ -826,6 +837,23 @@ class _DriverPageState extends State<DriverPage> {
       _safeSetState(() {
         isLoading = false;
       });
+    }
+  }
+
+  Future<void> _sendDriverOfflineSilently() async {
+    if (widget.jwtToken == null) return;
+
+    try {
+      await http.patch(
+        Uri.parse('$kBaseUrl/api/rides/driver/status/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'status': 'offline'}),
+      );
+    } catch (_) {
+      // ignore errors during dispose
     }
   }
 
@@ -925,10 +953,6 @@ class _DriverPageState extends State<DriverPage> {
         title: const Text('E-Rickshaw Driver'),
         leading: IconButton(
           onPressed: () {
-            print('=== NAVIGATION ===');
-            print('Logging out from Driver Dashboard');
-            print('==================');
-
             // Show confirmation dialog
             showDialog(
               context: context,
@@ -998,8 +1022,10 @@ class _DriverPageState extends State<DriverPage> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) =>
-                        PreviousRidesPage(jwtToken: widget.jwtToken!),
+                    builder: (context) => PreviousRidesPage(
+                      jwtToken: widget.jwtToken!,
+                      isDriver: true,
+                    ),
                   ),
                 );
               }

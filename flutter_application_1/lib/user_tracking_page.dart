@@ -8,7 +8,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'user_page.dart'; // ✅ for navigation back to user page
+import 'user_page.dart'; // for navigation back to user page
+import 'constants.dart';
 
 class UserTrackingPage extends StatefulWidget {
   final String? jwtToken;
@@ -42,10 +43,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   String _username = "-";
   String _phoneNumber = "-";
   String _vehicleNumber = "-";
+  String? _currentRideId;
 
   WebSocketChannel? _rideTrackingSocket;
   StreamSubscription? _socketSubscription;
-  String? _currentRideId;
   final Set<String> _processedRideEvents = <String>{};
 
   @override
@@ -114,14 +115,15 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       if (eventType == null) return;
 
       // Deduplicate events that may be delivered twice (user_<id> and ride_<id>)
-      final rideIdKey = data['ride_id']?.toString() ?? _currentRideId ?? '';
-      final dedupeKey = '${eventType}_$rideIdKey';
-      if (_processedRideEvents.contains(dedupeKey)) return;
-      _processedRideEvents.add(dedupeKey);
+      if (eventType != 'tracking_update') {
+        final rideIdKey = data['ride_id']?.toString() ?? _currentRideId ?? '';
+        final dedupeKey = '${eventType}_$rideIdKey';
 
-      final messenger = ScaffoldMessenger.of(context);
+        if (_processedRideEvents.contains(dedupeKey)) return;
+        _processedRideEvents.add(dedupeKey);
+      }
 
-      print('📡 Tracking WS message event: $eventType');
+      print('Tracking WS message event: $eventType');
 
       switch (eventType) {
         case 'tracking_update':
@@ -130,14 +132,16 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           double? lng;
           final latRaw = data['latitude'];
           final lngRaw = data['longitude'];
-          if (latRaw is num)
+          if (latRaw is num) {
             lat = latRaw.toDouble();
-          else
+          } else {
             lat = double.tryParse('$latRaw');
-          if (lngRaw is num)
+          }
+          if (lngRaw is num) {
             lng = lngRaw.toDouble();
-          else
+          } else {
             lng = double.tryParse('$lngRaw');
+          }
 
           if (lat != null && lng != null) {
             setState(() {
@@ -150,42 +154,53 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           setState(() {
             _status = 'cancelled';
           });
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(data['message'] ?? 'Ride cancelled'),
-              backgroundColor: Colors.orange,
+
+          final cancelMsg = data['message'] ?? 'Ride cancelled by driver';
+
+          // Show popup dialog instead of snackbar
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Ride Cancelled'),
+              content: Text(cancelMsg),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop(); // close dialog
+
+                    // Stop tracking and cancel subscription safely
+                    try {
+                      _sendStopTracking();
+                    } catch (_) {}
+
+                    try {
+                      await _socketSubscription?.cancel();
+                    } catch (e) {
+                      print(
+                        'Error cancelling tracking subscription on ride_cancelled: $e',
+                      );
+                    }
+                    if (!mounted) return;
+                    // Navigate back to main UserMapScreen
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => UserMapScreen(
+                          jwtToken: widget.jwtToken,
+                          sessionId: widget.sessionId,
+                          csrfToken: widget.csrfToken,
+                          refreshToken: widget.refreshToken,
+                          userData: widget.userData,
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('OK'),
+                ),
+              ],
             ),
           );
-          Future.delayed(const Duration(seconds: 2), () async {
-            if (!mounted) return;
 
-            // Stop tracking and cancel local subscription before navigating
-            try {
-              _sendStopTracking();
-            } catch (_) {}
-
-            try {
-              await _socketSubscription?.cancel();
-            } catch (e) {
-              print(
-                'Error cancelling tracking subscription on ride_cancelled: $e',
-              );
-            }
-
-            // Navigate back to main UserMapScreen so user lands on the map
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => UserMapScreen(
-                  jwtToken: widget.jwtToken,
-                  sessionId: widget.sessionId,
-                  csrfToken: widget.csrfToken,
-                  refreshToken: widget.refreshToken,
-                  userData: widget.userData,
-                ),
-              ),
-            );
-          });
           break;
 
         case 'ride_completed':
@@ -223,7 +238,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                 'Error cancelling tracking subscription on ride_completed: $e',
               );
             }
-
+            if (!mounted) return;
             // Navigate back to main UserMapScreen so user lands on the map
             Navigator.pushReplacement(
               context,
@@ -268,12 +283,12 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   }
 
   // ============================================================
-  // 📡 Get current ride info (ID + initial driver data)
+  // Get current ride info (ID + initial driver data)
   // ============================================================
   Future<void> _getCurrentRideInfo() async {
     try {
       final response = await http.get(
-        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current/'),
+        Uri.parse('$kBaseUrl/api/rides/passenger/current/'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.jwtToken}',
@@ -302,7 +317,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             }
           });
 
-          print('✅ Ride ID: $_currentRideId, Driver: $_username');
+          print('Ride ID: $_currentRideId, Driver: $_username');
         }
       }
     } catch (e) {
@@ -318,7 +333,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
       _rideTrackingSocket!.sink.add(msg);
-      print('📡 Sent start_tracking for ride $_currentRideId');
+      print('Sent start_tracking for ride $_currentRideId');
     }
   }
 
@@ -330,17 +345,17 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
       _rideTrackingSocket!.sink.add(msg);
-      print('📡 Sent stop_tracking for ride $_currentRideId');
+      print('Sent stop_tracking for ride $_currentRideId');
     }
   }
 
   // ============================================================
-  // 🔍 Get current ride ID for cancellation
+  // Get current ride ID for cancellation
   // ============================================================
   Future<String?> _getCurrentRideId() async {
     try {
       final response = await http.get(
-        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/current'),
+        Uri.parse('$kBaseUrl/api/rides/passenger/current'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -358,13 +373,13 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       }
       return null;
     } catch (e) {
-      print('⚠️ Error getting current ride ID: $e');
+      print('Error getting current ride ID: $e');
       return null;
     }
   }
 
   // ============================================================
-  // 🚫 Cancel current ride
+  // Cancel current ride
   // ============================================================
   Future<bool> _cancelRide() async {
     try {
@@ -372,35 +387,35 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       final rideId = await _getCurrentRideId();
 
       if (rideId == null) {
-        print('❌ No active ride found to cancel');
+        print('No active ride found to cancel');
         return false;
       }
 
-      print('🚫 Attempting to cancel ride $rideId...');
+      print('Attempting to cancel ride $rideId...');
 
       final response = await http.post(
-        Uri.parse('http://127.0.0.1:8000/api/rides/passenger/$rideId/cancel/'),
+        Uri.parse('$kBaseUrl/api/rides/passenger/$rideId/cancel/'),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
         },
       );
 
-      print('📡 Cancel response status: ${response.statusCode}');
-      print('📦 Cancel response body: ${response.body}');
+      print('Cancel response status: ${response.statusCode}');
+      print('Cancel response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         print(
-          '✅ Ride cancelled successfully: ${data['message'] ?? 'No message'}',
+          'Ride cancelled successfully: ${data['message'] ?? 'No message'}',
         );
         return true;
       } else {
-        print('❌ Failed to cancel ride: ${response.body}');
+        print('Failed to cancel ride: ${response.body}');
         return false;
       }
     } catch (e) {
-      print('🚨 Error cancelling ride: $e');
+      print('Error cancelling ride: $e');
       return false;
     }
   }
@@ -414,9 +429,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
-            print('=== BACK TO USER PAGE ===');
-            print('Navigating from tracking to user page');
-            print('========================');
+            print('Navigating back from tracking to user page');
 
             // Close local listener only; do NOT close the shared socket.
             _socketSubscription?.cancel();
@@ -529,13 +542,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                               ? null
                               : () async {
                                   print(
-                                    '=== CANCEL BUTTON PRESSED (TRACKING) ===',
-                                  );
-                                  print(
                                     'User cancelled ride from tracking page',
-                                  );
-                                  print(
-                                    '=======================================',
                                   );
 
                                   // Show confirmation dialog first
