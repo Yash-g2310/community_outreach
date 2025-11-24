@@ -4,10 +4,36 @@ from .models import User
 from drivers.models import DriverProfile
 
 class UserSerializer(serializers.ModelSerializer):
+    profile_picture_url = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = User
-        fields = [ "id", "username", "email", "role", "phone_number", "profile_picture", "completed_rides" ]
+        fields = [
+            "id",
+            "username",
+            "email",
+            "role",
+            "phone_number",
+            "completed_rides",
+            "profile_picture",
+            "profile_picture_url",
+        ]
+        read_only_fields = ["id", "completed_rides", "profile_picture_url"]
+        extra_kwargs = {
+            "profile_picture": {"write_only": True, "required": False}
+        }
 
+    def get_profile_picture_url(self, obj):
+        """
+        Generate absolute URL for Flutter.
+        If Flutter receives only relative paths, images BREAK.
+        """
+        if obj.profile_picture:
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(obj.profile_picture.url)
+            return obj.profile_picture.url
+        return None
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
