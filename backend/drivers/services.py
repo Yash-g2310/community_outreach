@@ -3,6 +3,7 @@ from django.utils import timezone
 from drivers.models import DriverProfile
 from rides.models import RideRequest
 from rides import notifications
+from utils import calculate_distance
 
 
 class RideNotFoundError(Exception):
@@ -54,9 +55,6 @@ def find_nearby_pending_rides(lat, lon):
     Your existing logic uses calculate_distance(), so we simply reuse that.
     """
     pending = RideRequest.objects.filter(status="pending")
-
-    # Compute distance manually (your existing function)
-    from rides.views import calculate_distance  # import lazily to avoid cross-import at startup
 
     # Annotate with distance
     rides_with_distance = []
