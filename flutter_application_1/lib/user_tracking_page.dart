@@ -59,39 +59,36 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     // Reuse the same StreamSubscription created in user_page
     _socketSubscription = widget.socketSubscription;
 
+    _setupWebSocketSubscription();
+    _initializeTracking();
+  }
+
+  void _setupWebSocketSubscription() {
     if (_socketSubscription != null) {
-      // Redirect incoming data to this page's handler
+      // Reuse existing subscription
       _socketSubscription!.onData(_handleWebSocketMessage);
-      _socketSubscription!.onError((err) {
-        print('Tracking WS error: $err');
-      });
-      _socketSubscription!.onDone(() {
-        print('Tracking WS closed');
-      });
-    } else if (_rideTrackingSocket != null) {
-      // If caller didn't pass an existing subscription, create one here
+      _socketSubscription!.onError((err) => print('Tracking WS error: $err'));
+      _socketSubscription!.onDone(() => print('Tracking WS closed'));
+      return;
+    }
+
+    // No passed subscription → create a new listener
+    if (_rideTrackingSocket != null) {
       try {
         _socketSubscription = _rideTrackingSocket!.stream.listen(
           _handleWebSocketMessage,
-          onError: (err) {
-            print('Tracking WS error: $err');
-          },
-          onDone: () {
-            print('Tracking WS closed');
-          },
+          onError: (err) => print('Tracking WS error: $err'),
+          onDone: () => print('Tracking WS closed'),
           cancelOnError: false,
         );
       } catch (e) {
         print('Warning: Failed to attach tracking subscription: $e');
       }
     } else {
-      // (Optional) log debug – no socket available
       print(
-        'Warning: UserTrackingPage started without a socket or subscription',
+        'Warning: User Tracking Page started without a socket or subscription',
       );
     }
-
-    _initializeTracking();
   }
 
   @override
@@ -115,7 +112,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       if (eventType == null) return;
 
       // Deduplicate events that may be delivered twice (user_<id> and ride_<id>)
-      if (eventType != 'tracking_update') {
+      if (eventType != 'driver_track_location') {
         final rideIdKey = data['ride_id']?.toString() ?? _currentRideId ?? '';
         final dedupeKey = '${eventType}_$rideIdKey';
 
@@ -126,7 +123,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       print('Tracking WS message event: $eventType');
 
       switch (eventType) {
-        case 'tracking_update':
+        case 'driver_track_location':
           // update driver position on map
           double? lat;
           double? lng;
@@ -262,14 +259,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   }
 
   Future<void> _initializeTracking() async {
-    await _getUserLocation();
+    await _getCurrentLocation();
     await _getCurrentRideInfo(); // Get ride ID and initial driver info
     if (_currentRideId != null) {
       _sendStartTracking();
     }
   }
 
-  Future<void> _getUserLocation() async {
+  Future<void> _getCurrentLocation() async {
     try {
       Position pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,

@@ -65,7 +65,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
   // WebSocket for ride status updates
   WebSocketChannel? _passengerSocket;
-  StreamSubscription? _socketSubscription;
+  StreamSubscription? _passengerSocketSubscription;
   bool _socketTransferred = false;
   final Set<String> _processedRideEvents = <String>{};
 
@@ -91,7 +91,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   @override
   void dispose() {
     _driversUpdateTimer?.cancel();
-    _socketSubscription?.cancel();
+    _passengerSocketSubscription?.cancel();
     // If we transferred the socket to another page, do not close it here.
     if (!_socketTransferred) {
       _passengerSocket?.sink.close();
@@ -171,7 +171,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         print("Cannot subscribe_nearby — currentPosition is null");
       }
 
-      _socketSubscription = _passengerSocket!.stream.listen(
+      _passengerSocketSubscription = _passengerSocket!.stream.listen(
         (message) {
           if (!mounted) return;
           // handler may be async; we don't await here but it will await inside as needed
@@ -225,9 +225,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
           // Mark transfer so dispose won't close the shared socket.
           // Transfer ownership of the socket subscription to the tracking page
           _socketTransferred = true;
-          final transferredSubscription = _socketSubscription;
+          final transferredSubscription = _passengerSocketSubscription;
           // Clear local reference so dispose won't cancel it
-          _socketSubscription = null;
+          _passengerSocketSubscription = null;
 
           // Logging: transfer prepared
           try {
@@ -339,7 +339,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
     print("Driver $driverId status changed → $status");
 
     // Only action needed: remove driver if explicitly offline
-    if (status == "offline") {
+    if (status == "offline" || status == "busy") {
       setState(() {
         _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
       });

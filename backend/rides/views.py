@@ -16,7 +16,6 @@ from .serializers import (
 from .notifications import (
     build_offers_for_ride,
     dispatch_next_offer,
-    expire_offer_and_dispatch,
     notify_driver_event,
     notify_passenger_event
 )
@@ -664,26 +663,21 @@ def accept_ride(request, ride_id):
             responded_at=timezone.now()
         )
 
-    other_driver_ids = (
-        ride.offers
-        .filter(sent_at__isnull=False)
-        .exclude(driver=request.user)
-        .values_list('driver_id', flat=True)
-    )
-    for driver_id in other_driver_ids:
-        notify_driver_event(
-            'ride_accepted',
-            ride,
-            driver_id,
-            'Another driver accepted this ride.',
+    # No need to notify other drivers as sequential offers are sent one at a time
+    try:
+        ride.offers.filter(sent_at__isnull=False).exclude(driver=request.user).update(
+            status='expired',
+            responded_at=timezone.now()
         )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('Failed to expire other offers for ride %s', ride.id)
 
     # Notify passenger that their ride was accepted
-    from .notifications import notify_passenger_event
     notify_passenger_event(
         'ride_accepted',
         ride,
-        'Your ride has been accepted! The driver is on the way.',
+        'Your Ride has been Accepted! The Driver is on the way.',
     )
 
     driver_profile.status = 'busy'
@@ -693,7 +687,7 @@ def accept_ride(request, ride_id):
     return Response({
         'success': True,
         'ride': serializer.data,
-        'message': 'Ride accepted successfully! Navigate to pickup location.'
+        'message': 'Ride Accepted Successfully! Navigate to pickup location.'
     })
 
 
@@ -911,7 +905,6 @@ def driver_cancel_ride(request, ride_id):
         
         # Notify passenger via websocket that driver cancelled
         try:
-            from .notifications import notify_passenger_event
             notify_passenger_event(
                 'ride_cancelled',
                 ride,

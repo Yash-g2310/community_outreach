@@ -56,7 +56,7 @@ class DriverPage extends StatefulWidget {
   State<DriverPage> createState() => _DriverPageState();
 }
 
-class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
+class _DriverPageState extends State<DriverPage> {
   bool isActive = true;
   bool isLoading = false;
   String? errorMessage;
@@ -64,6 +64,8 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
   Timer? _locationUpdateTimer;
   Position? _currentPosition;
   LatLng? _mapPosition; // For displaying on map
+  StreamSubscription<Position>? _positionStreamSubscription;
+  int? _currentRideId;
 
   // API Configuration uses centralized base URL from constants
 
@@ -79,7 +81,6 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _loadRejectedRides(); // Load rejected rides from local storage
     _loadDriverData();
     _initializeLocation();
@@ -88,7 +89,6 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _shouldMaintainSocket = false;
     _socketReconnectTimer?.cancel();
 
@@ -104,21 +104,8 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
       );
     }
     _locationUpdateTimer?.cancel();
+    _positionStreamSubscription?.cancel();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _logSocket('App lifecycle changed: $state');
-    // When the app is detached (closing) or paused (sent to background/home), mark driver offline
-    if (state == AppLifecycleState.detached ||
-        state == AppLifecycleState.paused) {
-      _shouldMaintainSocket = false;
-      try {
-        _updateDriverStatus(false);
-      } catch (_) {}
-      _cancelDriverSocket();
-    }
   }
 
   Future<void> _initializeLocation() async {
@@ -166,22 +153,40 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
   }
 
   void _startLocationUpdates() {
-    // Cancel existing timer if any
+    // Only start the periodic location loop when driver is marked available.
+    if (!isActive) {
+      _logDriver('Not starting location updates: driver is offline');
+      return;
+    }
+
+    // Cancel any existing timer or stream subscription
     _locationUpdateTimer?.cancel();
+    _positionStreamSubscription?.cancel();
 
-    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 10), (
-      timer,
-    ) async {
-      await _updateDriverLocation();
-    });
+    // Use Geolocator position stream to reduce battery/network usage.
+    // Emit only when device moves more than `distanceFilter` meters.
+    final locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 50,
+    );
 
-    print('Location update timer started');
+    _positionStreamSubscription =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          (Position position) async {
+            if (!isActive) return;
+            await _sendLocationToServer(position);
+          },
+        );
+
+    _logDriver('Location update stream started');
   }
 
   void _stopLocationUpdates() {
     _locationUpdateTimer?.cancel();
     _locationUpdateTimer = null;
-    print('Location update timer stopped');
+    _positionStreamSubscription?.cancel();
+    _positionStreamSubscription = null;
+    print('Location update stream/timer stopped');
   }
 
   void _logDriver(String message, {String tag = 'Driver'}) {
@@ -291,7 +296,8 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
             'Connection established: ${data['message'] ?? 'Connected'}',
           );
           break;
-        case 'new_ride_request':
+
+        case 'ride_offer':
           final rideData = data['ride'];
           if (rideData is Map) {
             // Only add incoming rides that are still pending. If the ride was
@@ -311,44 +317,37 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
           break;
 
         case 'ride_cancelled':
-        case 'ride_accepted':
         case 'ride_expired':
           _handleRideRemoval(
             data['ride_id'],
             data['message'] ??
                 (eventType == 'ride_cancelled'
                     ? 'Ride cancelled by passenger'
-                    : eventType == 'ride_expired'
-                    ? 'Ride offer timed out'
-                    : 'Ride accepted by another driver'),
+                    : 'Ride offer timed out'),
           );
+          // If the cancelled/expired ride matches our current active ride,
+          // clear the current ride state so we revert to availability updates.
+          try {
+            final incoming = data['ride_id'];
+            final int? rid = incoming is int
+                ? incoming
+                : int.tryParse('$incoming');
+            if (rid != null &&
+                _currentRideId != null &&
+                rid == _currentRideId) {
+              _logSocket(
+                'Active ride $rid ended/cancelled - clearing current ride state',
+              );
+              _currentRideId = null;
+              // restart location updates if driver remains available
+              if (isActive) {
+                _stopLocationUpdates();
+                _startLocationUpdates();
+              }
+            }
+          } catch (_) {}
           break;
 
-        case 'offer_accept_failed':
-          // Backend informed us that the accept attempt failed (race or already taken)
-          final rideId = data['ride_id'];
-          final message = data['message'] ?? 'Ride is no longer available';
-
-          // Remove the ride from our list (if present) and show a visible dialog
-          _handleRideRemoval(rideId, message);
-
-          if (mounted) {
-            // Show an alert so the driver clearly notices the failure
-            showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Accept Failed'),
-                content: Text(message),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('OK'),
-                  ),
-                ],
-              ),
-            );
-          }
-          break;
         default:
           print('Unhandled WS event: $data');
       }
@@ -505,45 +504,50 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _updateDriverLocation() async {
-    print('=== LOCATION UPDATE STARTED ===');
+  Future<void> _sendLocationToServer(Position position) async {
+    _currentPosition = position;
+    _safeSetState(() {
+      _mapPosition = LatLng(position.latitude, position.longitude);
+    });
 
-    // Check if driver is online before sending location updates
-    if (!isActive) {
-      print('Driver is offline - skipping location update');
-      print('=== LOCATION UPDATE SKIPPED ===');
-      return;
-    }
-
-    // ALWAYS get fresh GPS location before sending update
-    print('Getting fresh GPS location...');
-    await _getCurrentLocation();
-
-    if (_currentPosition != null && _driverSocket != null) {
+    if (_driverSocket != null) {
       try {
-        // Truncate coordinates to 6 decimal places
         double truncatedLatitude = double.parse(
-          _currentPosition!.latitude.toStringAsFixed(6),
+          position.latitude.toStringAsFixed(6),
         );
         double truncatedLongitude = double.parse(
-          _currentPosition!.longitude.toStringAsFixed(6),
+          position.longitude.toStringAsFixed(6),
         );
 
-        print(
-          'Sending location update via WebSocket: $truncatedLatitude, $truncatedLongitude',
-        );
+        if (_currentRideId != null) {
+          print(
+            'Sending Tracking Update for ride $_currentRideId: $truncatedLatitude, $truncatedLongitude',
+          );
 
-        final wsPayload = json.encode({
-          'type': 'driver_location_update',
-          'latitude': truncatedLatitude,
-          'longitude': truncatedLongitude,
-        });
-        _driverSocket!.sink.add(wsPayload);
+          final wsPayload = json.encode({
+            'type': 'tracking_update',
+            'ride_id': _currentRideId,
+            'latitude': truncatedLatitude,
+            'longitude': truncatedLongitude,
+          });
+          _driverSocket!.sink.add(wsPayload);
+        } else if (isActive) {
+          print(
+            'Sending Updated Location via WS (stream): $truncatedLatitude, $truncatedLongitude',
+          );
+
+          final wsPayload = json.encode({
+            'type': 'driver_location_update',
+            'latitude': truncatedLatitude,
+            'longitude': truncatedLongitude,
+          });
+          _driverSocket!.sink.add(wsPayload);
+        }
       } catch (e) {
         print('Error sending driver location via WebSocket: $e');
       }
     } else {
-      print('ERROR: Could not get current position or WebSocket not connected');
+      print('ERROR: WebSocket not connected - cannot send location');
     }
   }
 
@@ -758,12 +762,15 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
           backgroundColor: Colors.green,
         );
 
+        // Mark current ride id so location updates are sent as tracking_update
+        _currentRideId = rideId;
+
         // Navigate to ride tracking page
         if (mounted) {
           // Transfer the existing socket subscription to the tracking page
+          _socketTransferred = true;
           final transferredSubscription = _driverSocketSubscription;
           _driverSocketSubscription = null;
-          _socketTransferred = true;
 
           Navigator.push(
             context,
@@ -815,22 +822,35 @@ class _DriverPageState extends State<DriverPage> with WidgetsBindingObserver {
     });
 
     try {
-      // Add to local rejected rides list (client-side filtering)
-      await _addRejectedRide(rideId);
+      // Call server API to reject the ride offer so backend state is authoritative.
+      final response = await http.post(
+        Uri.parse('$kBaseUrl/api/rides/handle/$rideId/reject/'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
 
       if (!mounted) return;
 
-      // Remove the rejected ride from current notifications
-      _safeSetState(() {
-        notifications.removeWhere((notif) => notif['id'] == rideId);
-      });
+      if (response.statusCode == 200) {
+        // Persist locally that we rejected this ride (so it won't reappear)
+        await _addRejectedRide(rideId);
 
-      _showSnackBar(
-        'Ride rejected - hidden from your list! ❌',
-        backgroundColor: Colors.orange,
-      );
+        // Remove the rejected ride from current notifications
+        _safeSetState(() {
+          notifications.removeWhere((notif) => notif['id'] == rideId);
+        });
 
-      print('Ride $rideId rejected and hidden locally');
+        _showSnackBar(
+          'Ride rejected - hidden from your list! ❌',
+          backgroundColor: Colors.orange,
+        );
+
+        print('Ride $rideId rejected (server acknowledged) and hidden locally');
+      } else {
+        throw Exception('Failed to reject ride: ${response.statusCode}');
+      }
     } catch (e) {
       _showSnackBar('Error rejecting ride: $e', backgroundColor: Colors.red);
     } finally {

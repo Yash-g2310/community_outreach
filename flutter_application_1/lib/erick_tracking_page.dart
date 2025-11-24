@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'erick_driver_page.dart';
 import 'constants.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -26,7 +27,7 @@ class RideTrackingPage extends StatefulWidget {
   final double? dropoffLng;
   final String? accessToken;
   final bool isDriver;
-  final dynamic rideSocket; // WebSocket channel for ride group events
+  final WebSocketChannel? rideSocket; // WebSocket channel for ride group events
   final StreamSubscription? socketSubscription;
 
   const RideTrackingPage({
@@ -59,6 +60,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   String _rideStatus = 'accepted';
   bool _isLoading = false;
   Timer? _locationTimer;
+  WebSocketChannel? _rideTrackingSocket;
   StreamSubscription? _wsSubscription;
 
   // API Configuration uses centralized base URL from constants
@@ -66,20 +68,57 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   @override
   void initState() {
     super.initState();
-    _initializeTracking();
-    _listenForRideTrackingEvents();
+
+    _rideTrackingSocket = widget.rideSocket;
+    _wsSubscription = widget.socketSubscription;
+
+    _setupWebSocketSubscription();
+    _setupTracking();
+  }
+
+  void _setupWebSocketSubscription() {
+    if (_wsSubscription != null) {
+      // Reuse existing subscription
+      _wsSubscription!.onData(_handleWebSocketMessage);
+      _wsSubscription!.onError((err) => print('Tracking WS error: $err'));
+      _wsSubscription!.onDone(() => print('Tracking WS closed'));
+      return;
+    }
+
+    // No passed subscription → create a new listener
+    if (_rideTrackingSocket != null) {
+      try {
+        _wsSubscription = _rideTrackingSocket!.stream.listen(
+          _handleWebSocketMessage,
+          onError: (err) => print('Tracking WS error: $err'),
+          onDone: () => print('Tracking WS closed'),
+          cancelOnError: false,
+        );
+      } catch (e) {
+        print('Warning: Failed to attach tracking subscription: $e');
+      }
+    } else {
+      print(
+        'Warning: Driver Tracking Page started without a socket or subscription',
+      );
+    }
+  }
+
+  Future<void> _setupTracking() async {
+    await _getCurrentLocation(); // Get initial location
+    _startLocationUpdates(); // Start every 10 seconds
+    _sendStartTracking(); // Now start listening to WS messages
   }
 
   @override
   void dispose() {
     _locationTimer?.cancel();
-    _wsSubscription?.cancel();
+    try {
+      _wsSubscription?.cancel();
+    } catch (e) {
+      print('Error cancelling tracking subscription: $e');
+    }
     super.dispose();
-  }
-
-  Future<void> _initializeTracking() async {
-    await _getCurrentLocation();
-    _startLocationUpdates();
   }
 
   Future<void> _getCurrentLocation() async {
@@ -104,120 +143,68 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   }
 
   // Listen for WebSocket ride tracking events
-  void _listenForRideTrackingEvents() {
-    // If already listening, don't attach again
-    if (_wsSubscription != null) return;
-
+  void _sendStartTracking() {
+    // If no socket is available, do nothing
     final socket = widget.rideSocket;
-    if (socket == null) return;
-
-    // Always listen fresh — do NOT steal the driver map subscription
-    try {
-      final stream = socket.stream;
-      if (stream is Stream) {
-        _wsSubscription = stream.listen(
-          _handleWebSocketMessage,
-          onError: (err) {
-            print('Tracking WS Error: $err');
-          },
-          onDone: () {
-            print('Tracking WS Closed (listener ended)');
-          },
-          cancelOnError: false,
-        );
-
-        print("TrackingPage: Started listening to WS stream");
-      }
-    } catch (e) {
-      print("TrackingPage: Unable to listen to WebSocket stream: $e");
+    if (socket == null) {
+      print("Driver Tracking Page: No socket available for start_tracking");
       return;
     }
 
-    // Send start_tracking command (but do NOT take ownership of socket)
+    // Send start_tracking only ONCE
     try {
-      final sink = socket.sink;
-      sink.add(
+      socket.sink.add(
         json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
       );
+      print("Driver Tracking Page: Sent start_tracking");
     } catch (e) {
-      print("TrackingPage: Error sending start_tracking: $e");
+      print("Driver Tracking Page: Error sending start_tracking: $e");
     }
   }
 
   void _handleWebSocketMessage(dynamic message) {
     try {
-      final rawPayload = message is String ? message : message.toString();
-      final data = json.decode(rawPayload) as Map<String, dynamic>;
+      final raw = message is String ? message : message.toString();
+      final data = json.decode(raw) as Map<String, dynamic>;
       final eventType = data['type'] as String?;
       if (eventType == null) return;
 
       final messenger = ScaffoldMessenger.of(context);
 
       switch (eventType) {
-        case 'tracking_update':
-          // Update position on map
-          final lat = data['latitude'] as double?;
-          final lng = data['longitude'] as double?;
-          if (lat != null && lng != null) {
-            setState(() {
-              _currentPosition = LatLng(lat, lng);
-            });
-          }
-          break;
-
-        // ----------------- RIDE CANCELLED -----------------
         case 'ride_cancelled':
-          setState(() {
-            _rideStatus = 'cancelled';
-          });
+          setState(() => _rideStatus = 'cancelled');
 
-          final cancelMsg = data['message'] ?? 'Ride cancelled';
-
+          final msg = data['message'] ?? 'Ride cancelled';
           messenger.showSnackBar(
-            SnackBar(backgroundColor: Colors.orange, content: Text(cancelMsg)),
+            SnackBar(backgroundColor: Colors.orange, content: Text(msg)),
           );
 
           Future.delayed(const Duration(seconds: 2), () {
             if (mounted) Navigator.pop(context);
           });
-
           break;
 
-        // ----------------- RIDE EXPIRED -----------------
         case 'ride_expired':
-          setState(() {
-            _rideStatus = 'expired';
-          });
+          setState(() => _rideStatus = 'expired');
 
-          final expireMsg = data['message'] ?? 'Ride offer expired';
-
-          // Snackbar only
+          final msg = data['message'] ?? 'Ride offer expired';
           messenger.showSnackBar(
-            SnackBar(backgroundColor: Colors.red, content: Text(expireMsg)),
+            SnackBar(backgroundColor: Colors.red, content: Text(msg)),
           );
 
           Future.delayed(const Duration(seconds: 2), () {
             if (mounted) Navigator.pop(context);
           });
-
           break;
 
         case 'ride_completed':
-          setState(() {
-            _rideStatus = 'completed';
-          });
+          setState(() => _rideStatus = 'completed');
 
-          // For drivers and passengers navigate back to their respective
-          // map screens. Use a modal for passengers (already handled in
-          // UserTrackingPage) — here we replace the current route with
-          // the driver map when this page is used by a driver.
           if (widget.isDriver) {
-            if (!mounted) return;
-
-            // Best-effort: stop tracking
+            // Stop tracking best-effort
             try {
-              final sink = widget.rideSocket?.sink;
-              sink?.add(
+              widget.rideSocket?.sink.add(
                 json.encode({
                   'type': 'stop_tracking',
                   'ride_id': widget.rideId,
@@ -229,6 +216,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
               _wsSubscription?.cancel();
             } catch (_) {}
 
+            if (!mounted) return;
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -242,17 +230,16 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                 backgroundColor: Colors.green,
               ),
             );
+
             Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) {
-                Navigator.pop(context);
-              }
+              if (mounted) Navigator.pop(context);
             });
           }
-
           break;
 
         default:
-        // Ignore other events
+          // ignore all unrelated events
+          break;
       }
     } catch (e) {
       print('Error decoding WS message: $e | raw=$message');
@@ -289,8 +276,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           ),
         );
 
-        // Navigate back after a short delay. For drivers replace route
-        // with the main driver map; for passengers just pop.
+        // Navigate back to driver page after short delay
         Future.delayed(const Duration(seconds: 2), () async {
           if (!mounted) return;
 
@@ -407,7 +393,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           ),
         );
 
-        // ⏳ Navigate back to notifications after short delay
+        // Navigate back to driver page after short delay
         Future.delayed(const Duration(seconds: 2), () async {
           if (!mounted) return;
 

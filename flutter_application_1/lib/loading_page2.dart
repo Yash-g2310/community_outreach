@@ -67,7 +67,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
   }) {
     return AnimatedBuilder(
       animation: _controller,
-      builder: (_, __) {
+      builder: (_, _) {
         return Opacity(
           opacity: opacity.value,
           child: Transform.scale(
@@ -141,7 +141,7 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
 
                     AnimatedBuilder(
                       animation: _controller,
-                      builder: (_, __) {
+                      builder: (_, _) {
                         return Transform.scale(
                           scale: _innerScale.value,
                           child: Container(
