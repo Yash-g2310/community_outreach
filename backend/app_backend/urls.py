@@ -12,9 +12,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     
     # Authentication endpoints (at /api/auth/)
-    path('api/auth/register/', RegisterView.as_view(), name='register'),
-    path('api/auth/login/', LoginView.as_view(), name='login'),
-    path('api/auth/refresh/', RefreshTokenView.as_view(), name='refresh-token'),
+    path('api/auth/', include('accounts.urls')),  # accounts.urls have register, login, refresh endpoints
     
     # Rides endpoints (at /api/rides/)
     path('api/rides/', include('rides.urls')),      # rides.urls have all the actual ride-related endpoints
