@@ -1,60 +1,9 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
-from django.utils import timezone
-
-
-class User(AbstractUser):
-    """Extended user model with role selection"""
-    ROLE_CHOICES = [
-        ('user', 'Passenger'),
-        ('driver', 'E-Rickshaw Owner'),
-    ]
-    
-    # Role & basic info
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
-    phone_number = models.CharField(max_length=15)
-    profile_picture = models.ImageField(upload_to='profile_pictures/', null=True, blank=True)
-    
-    # Ride statistics (common for both user and driver)
-    completed_rides = models.IntegerField(default=0)
-    
-    class Meta:
-        db_table = 'users'
-        
-    def __str__(self):
-        return f"{self.username} ({self.get_role_display()})"
-
-
-class DriverProfile(models.Model):
-    """Driver-specific details and availability status"""
-    STATUS_CHOICES = [
-        ('available', 'Available'),
-        ('busy', 'Busy'),
-        ('offline', 'Offline'),
-    ]
-    
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='driver_profile')
-    
-    # Vehicle details
-    vehicle_number = models.CharField(max_length=20, unique=True)
-    # vehicle_model = models.CharField(max_length=100, blank=True)  # Commented out for simplicity
-    # license_number = models.CharField(max_length=50, blank=True)  # Commented out - trusting drivers
-    
-    # Status & location (for real-time tracking with OpenStreetMap)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='offline')
-    current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    last_location_update = models.DateTimeField(default=timezone.now)
-    
-    class Meta:
-        db_table = 'driver_profiles'
-        
-    def __str__(self):
-        return f"{self.user.username} - {self.vehicle_number}"
-
+from django.conf import settings
 
 class RideRequest(models.Model):
     """Simplified ride request model for polling-based notifications"""
+
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('accepted', 'Accepted'),
@@ -63,59 +12,92 @@ class RideRequest(models.Model):
         ('cancelled_user', 'Cancelled by User'),
         ('cancelled_driver', 'Cancelled by Driver'),
     ]
-    
+
     # Foreign keys
-    passenger = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ride_requests')
-    driver = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='accepted_rides')
-    
+    passenger = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='ride_requests'
+    )
+
+    driver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='accepted_rides'
+    )
+
     # Pickup location
-    pickup_latitude = models.DecimalField(max_digits=10, decimal_places=6)
-    pickup_longitude = models.DecimalField(max_digits=10, decimal_places=6)
+    pickup_latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    pickup_longitude = models.DecimalField(max_digits=9, decimal_places=6)
     pickup_address = models.TextField(null=True, blank=True)
-    
-    # Dropoff location (only address needed)
+
+    # Dropoff location
     dropoff_address = models.TextField(null=True, blank=True)
-    
+
     # Passenger count
     number_of_passengers = models.IntegerField(default=1)
-    
-    # Status & timing
+
+    # Status & searching radius
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    
-    # Broadcast radius in meters (default 1 km)
     broadcast_radius = models.IntegerField(default=1000)
-    
+
     # Timestamps
     requested_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
-    
-    # Cancellation reason
+
     cancellation_reason = models.TextField(null=True, blank=True)
-    
+
     class Meta:
         db_table = 'ride_requests'
         ordering = ['-requested_at']
-        
+
     def __str__(self):
-        return f"Ride #{self.id} - {self.passenger.username} - {self.status}"
-    
+        return f"Ride #{self.id} - {self.passenger} - {self.status}"
+
 
 class RideOffer(models.Model):
-    """Helps in tracking which drivers were offered a ride request to Implement Daisy Chaining"""
+    """Tracks which drivers were offered the ride (Daisy Chain / matching queue)."""
 
-    ride = models.ForeignKey(RideRequest, on_delete=models.CASCADE, related_name='offers')
-    driver = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'driver'})
+    ride = models.ForeignKey(
+        RideRequest,
+        on_delete=models.CASCADE,
+        related_name='offers'
+    )
+
+    driver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        limit_choices_to={'role': 'driver'}
+    )
+
     order = models.PositiveIntegerField()  # 0 = closest driver
-    status = models.CharField(             # status = Ki driver ka kya response raha us request ke regarding jab usko mili
+
+    status = models.CharField(
         max_length=20,
-        choices=[('pending', 'Pending'), ('accepted', 'Accepted'), ('rejected', 'Rejected'), ('expired', 'Expired')],
+        choices=[
+            ('pending', 'Pending'),
+            ('accepted', 'Accepted'),
+            ('rejected', 'Rejected'),
+            ('expired', 'Expired'),
+        ],
         default='pending',
     )
+
     sent_at = models.DateTimeField(null=True, blank=True)
     responded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = ('ride', 'driver')
         ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['ride', 'driver'],
+                name='unique_ride_driver'
+            )
+        ]
+
+    def __str__(self):
+        return f"Offer #{self.id} - Ride {self.ride.id} -> Driver {self.driver}"

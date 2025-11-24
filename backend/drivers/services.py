@@ -3,7 +3,7 @@ from django.utils import timezone
 from drivers.models import DriverProfile
 from rides.models import RideRequest
 from rides import notifications
-from utils import calculate_distance
+from rides.utils import calculate_distance
 
 
 class RideNotFoundError(Exception):

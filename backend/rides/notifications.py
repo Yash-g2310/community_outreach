@@ -7,7 +7,8 @@ from channels.layers import get_channel_layer
 from django.utils import timezone
 import logging
 
-from .models import DriverProfile, RideOffer, RideRequest
+from .models import RideOffer, RideRequest
+from drivers.models import DriverProfile
 from .serializers import RideRequestSerializer
 from .utils import calculate_distance
 from rides.tasks import expire_ride_offer_task

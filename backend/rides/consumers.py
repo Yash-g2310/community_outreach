@@ -7,7 +7,7 @@ from asgiref.sync import async_to_sync
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
-from .models import RideRequest, DriverProfile
+from drivers.models import DriverProfile
 from .utils import calculate_distance
 
 User = get_user_model()
@@ -495,7 +495,6 @@ class AppConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _update_driver_location_db(self, lat, lon):
         # update the driver's DriverProfile (safely)
-        from .models import DriverProfile
         try:
             profile = self.user.driver_profile
             profile.current_latitude = lat
@@ -513,7 +512,6 @@ class AppConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _update_driver_status_db(self, status):
-        from .models import DriverProfile
         try:
             profile = self.user.driver_profile
             profile.status = status

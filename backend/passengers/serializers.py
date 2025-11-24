@@ -40,9 +40,6 @@ class PassengerBasicSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'phone_number']
 
 
-from rest_framework import serializers
-
-
 class RequestLocationSerializer(serializers.Serializer):
     """
     Validates latitude/longitude sent by passenger or driver.

@@ -22,299 +22,63 @@ from .notifications import (
 from .utils import calculate_distance
 
 
-@api_view(['GET'])
-def health_check(request):
-    """Health check endpoint for monitoring system status"""
-    health_status = {
-        'status': 'healthy',
-        'timestamp': timezone.now().isoformat(),
-        'services': {}
-    }
+# @api_view(['GET'])
+# def health_check(request):
+#     """Health check endpoint for monitoring system status"""
+#     health_status = {
+#         'status': 'healthy',
+#         'timestamp': timezone.now().isoformat(),
+#         'services': {}
+#     }
 
-    # Check database
-    try:
-        RideRequest.objects.count()
-        health_status['services']['database'] = 'healthy'
-    except Exception as e:
-        health_status['services']['database'] = f'unhealthy: {str(e)}'
-        health_status['status'] = 'unhealthy'
+#     # Check database
+#     try:
+#         RideRequest.objects.count()
+#         health_status['services']['database'] = 'healthy'
+#     except Exception as e:
+#         health_status['services']['database'] = f'unhealthy: {str(e)}'
+#         health_status['status'] = 'unhealthy'
 
-    # Check Redis
-    try:
-        redis_client = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            db=0,
-            socket_timeout=5
-        )
-        redis_client.ping()
-        health_status['services']['redis'] = 'healthy'
-    except Exception as e:
-        health_status['services']['redis'] = f'unhealthy: {str(e)}'
-        health_status['status'] = 'unhealthy'
+#     # Check Redis
+#     try:
+#         redis_client = redis.Redis(
+#             host=os.getenv('REDIS_HOST', 'localhost'),
+#             port=int(os.getenv('REDIS_PORT', 6379)),
+#             db=0,
+#             socket_timeout=5
+#         )
+#         redis_client.ping()
+#         health_status['services']['redis'] = 'healthy'
+#     except Exception as e:
+#         health_status['services']['redis'] = f'unhealthy: {str(e)}'
+#         health_status['status'] = 'unhealthy'
 
-    # Check channel layer
-    try:
-        channel_layer = get_channel_layer()
-        if channel_layer:
-            health_status['services']['channels'] = 'healthy'
-        else:
-            health_status['services']['channels'] = 'unhealthy: no channel layer'
-            health_status['status'] = 'unhealthy'
-    except Exception as e:
-        health_status['services']['channels'] = f'unhealthy: {str(e)}'
-        health_status['status'] = 'unhealthy'
+#     # Check channel layer
+#     try:
+#         channel_layer = get_channel_layer()
+#         if channel_layer:
+#             health_status['services']['channels'] = 'healthy'
+#         else:
+#             health_status['services']['channels'] = 'unhealthy: no channel layer'
+#             health_status['status'] = 'unhealthy'
+#     except Exception as e:
+#         health_status['services']['channels'] = f'unhealthy: {str(e)}'
+#         health_status['status'] = 'unhealthy'
 
-    # Check Celery (by checking if task is registered)
-    try:
-        from .tasks import expire_ride_offer_task
-        if expire_ride_offer_task:
-            health_status['services']['celery'] = 'healthy'
-        else:
-            health_status['services']['celery'] = 'unhealthy: task not found'
-            health_status['status'] = 'unhealthy'
-    except Exception as e:
-        health_status['services']['celery'] = f'unhealthy: {str(e)}'
-        health_status['status'] = 'unhealthy'
+#     # Check Celery (by checking if task is registered)
+#     try:
+#         from .tasks import expire_ride_offer_task
+#         if expire_ride_offer_task:
+#             health_status['services']['celery'] = 'healthy'
+#         else:
+#             health_status['services']['celery'] = 'unhealthy: task not found'
+#             health_status['status'] = 'unhealthy'
+#     except Exception as e:
+#         health_status['services']['celery'] = f'unhealthy: {str(e)}'
+#         health_status['status'] = 'unhealthy'
 
-    status_code = status.HTTP_200_OK if health_status['status'] == 'healthy' else status.HTTP_503_SERVICE_UNAVAILABLE
-    return Response(health_status, status=status_code)
-
-
-@api_view(['GET', 'POST', 'PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def user_profile(request):
-    """Get or update user profile (including profile picture)"""
-    user = request.user
-    
-    if request.method == 'GET':
-        serializer = UserSerializer(user, context={'request': request})
-        return Response(serializer.data)
-    
-    elif request.method in ['POST', 'PUT', 'PATCH']:
-        # Handle both JSON and multipart/form-data
-        serializer = UserSerializer(user, data=request.data, partial=True, context={'request': request})
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-
-@api_view(['POST', 'GET'])
-@permission_classes([IsAuthenticated])
-def driver_profile(request):
-    """Create or get driver profile"""
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    if request.method == 'GET':
-        try:
-            profile = request.user.driver_profile
-            serializer = DriverProfileSerializer(profile, context={'request': request})
-            return Response(serializer.data)
-        except DriverProfile.DoesNotExist:
-            return Response(
-                {'error': 'Driver profile not found. Please create one.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-    
-    elif request.method == 'POST':
-        # Create or update driver profile
-        profile, created = DriverProfile.objects.get_or_create(
-            user=request.user,
-            defaults={'vehicle_number': request.data.get('vehicle_number')}
-        )
-        
-        if not created:
-            # Update existing profile
-            profile.vehicle_number = request.data.get('vehicle_number', profile.vehicle_number)
-            profile.save()
-        
-        serializer = DriverProfileSerializer(profile, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
-
-
-@api_view(['GET', 'PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def update_driver_status(request):
-    """Get or update driver availability status"""
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-
-    try:
-        profile = request.user.driver_profile
-    except DriverProfile.DoesNotExist:
-        return Response(
-            {'error': 'Driver profile not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    if request.method == 'GET':
-        return Response({
-            'status': profile.status,
-            'vehicle_number': profile.vehicle_number,
-            'current_latitude': profile.current_latitude,
-            'current_longitude': profile.current_longitude,
-            'last_location_update': profile.last_location_update
-        })
-
-    # PUT or PATCH - update driver status
-    serializer = DriverStatusSerializer(data=request.data)
-    if serializer.is_valid():
-        old_status = profile.status
-        new_status = serializer.validated_data['status']
-
-        profile.status = new_status
-        profile.save(update_fields=['status'])
-
-        # NEW WEBSOCKET ARCHITECTURE:
-        # Notify nearby passengers only
-        from channels.layers import get_channel_layer
-        channel_layer = get_channel_layer()
-
-        # Send only if driver has valid location
-        if profile.current_latitude and profile.current_longitude:
-            notify_nearby_passengers_sync(
-                channel_layer,
-                driver_id=request.user.id,
-                lat=float(profile.current_latitude),
-                lon=float(profile.current_longitude),
-                event_type="driver_status_changed",
-                extra={"status": new_status}
-            )
-
-        return Response({
-            'status': new_status,
-            'message': f'You are now {new_status}'
-        })
-
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(['GET', 'POST', 'PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def update_driver_location(request):
-    """Get or update driver's current location"""
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    try:
-        profile = request.user.driver_profile
-    except DriverProfile.DoesNotExist:
-        return Response(
-            {'error': 'Driver profile not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    if request.method == 'GET':
-        return Response({
-            'latitude': float(profile.current_latitude) if profile.current_latitude else None,
-            'longitude': float(profile.current_longitude) if profile.current_longitude else None,
-            'last_updated': profile.last_location_update,
-            'status': profile.status,
-            'vehicle_number': profile.vehicle_number
-        })
-    
-    # POST, PUT, or PATCH - Update location
-    serializer = LocationUpdateSerializer(data=request.data)
-    if serializer.is_valid():
-        old_lat = profile.current_latitude
-        old_lon = profile.current_longitude
-        
-        profile.current_latitude = serializer.validated_data['latitude']
-        profile.current_longitude = serializer.validated_data['longitude']
-        profile.last_location_update = timezone.now()
-        profile.save()
-
-        # NEW ARCHITECTURE:
-        # Notify only NEARBY passengers (not all)
-        if profile.status == 'available':
-            if profile.current_latitude and profile.current_longitude:
-                notify_nearby_passengers_sync(
-                    get_channel_layer(),
-                    driver_id=request.user.id,
-                    lat=float(profile.current_latitude),
-                    lon=float(profile.current_longitude),
-                    event_type="driver_location_updated"
-                )
-
-        return Response({
-            'message': 'Location updated successfully',
-            'latitude': float(profile.current_latitude),
-            'longitude': float(profile.current_longitude),
-            'last_updated': profile.last_location_update,
-            'status': profile.status
-        })
-    
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def nearby_drivers_for_passenger(request):
-    """
-    Get nearby available drivers for passenger home screen map
-    Uses POST to keep location data secure in request body
-    """
-    if request.user.role != 'user':
-        return Response(
-            {'error': 'Only passengers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    serializer = LocationUpdateSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    passenger_lat = serializer.validated_data['latitude']
-    passenger_lon = serializer.validated_data['longitude']
-    
-    # Default search radius: 1km
-    search_radius = request.data.get('radius', 1000)
-    
-    # Get all available drivers with location
-    available_drivers = DriverProfile.objects.filter(
-        status='available',
-        current_latitude__isnull=False,
-        current_longitude__isnull=False
-    ).select_related('user')
-    
-    # Calculate distance and filter
-    nearby = []
-    for driver in available_drivers:
-        distance = calculate_distance(
-            passenger_lat, passenger_lon,
-            driver.current_latitude, driver.current_longitude
-        )
-        
-        if distance <= search_radius:
-            nearby.append({
-                'driver_id': driver.id,
-                'username': driver.user.username,
-                'vehicle_number': driver.vehicle_number,
-                'latitude': float(driver.current_latitude),
-                'longitude': float(driver.current_longitude),
-                'distance_meters': round(distance, 2),
-                'last_updated': driver.last_location_update
-            })
-    
-    # Sort by distance
-    nearby.sort(key=lambda x: x['distance_meters'])
-    
-    return Response({
-        'count': len(nearby),
-        'drivers': nearby,
-        'search_radius_meters': search_radius
-    })
+#     status_code = status.HTTP_200_OK if health_status['status'] == 'healthy' else status.HTTP_503_SERVICE_UNAVAILABLE
+#     return Response(health_status, status=status_code)
 
 
 # ==================== Passenger Ride APIs ====================
@@ -519,126 +283,7 @@ def cancel_ride(request, ride_id):
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def ride_history(request):
-    """Get passenger's ride history"""
-    if request.user.role != 'user':
-        return Response(
-            {'error': 'Only passengers can access ride history'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    rides = RideRequest.objects.filter(
-        passenger=request.user,
-        status__in=['completed', 'cancelled_user', 'cancelled_driver']
-    ).order_by('-requested_at')[:20]  # Last 20 rides
-    
-    serializer = RideRequestSerializer(rides, many=True, context={'request': request})
-    return Response({
-        'rides': serializer.data,
-        'count': len(serializer.data)
-    })
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def driver_ride_history(request):
-    """Get driver's ride history (completed and cancelled rides)"""
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access ride history'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    rides = RideRequest.objects.filter(
-        driver=request.user,
-        status__in=['completed', 'cancelled_user', 'cancelled_driver']
-    ).order_by('-requested_at')[:20]  # Last 20 rides
-    
-    serializer = RideRequestSerializer(rides, many=True, context={'request': request})
-    return Response({
-        'rides': serializer.data,
-        'count': len(serializer.data)
-    })
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def nearby_rides(request):
-    """
-    Get nearby pending ride requests for drivers
-    
-    Driver sends their current location and gets rides within 500m radius
-    Request body: {"latitude": 28.5355, "longitude": 77.3910}
-    """
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-    
-    try:
-        driver_profile = request.user.driver_profile
-    except DriverProfile.DoesNotExist:
-        return Response(
-            {'error': 'Driver profile not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    # Only show rides if driver is available
-    if driver_profile.status != 'available':
-        return Response({
-            'rides': [],
-            'count': 0,
-            'message': 'You must be available to see nearby rides'
-        })
-    
-    # Validate and get driver's current location from request body
-    serializer = LocationUpdateSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(
-            {'error': 'Please provide latitude and longitude in request body'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    driver_lat = serializer.validated_data['latitude']
-    driver_lon = serializer.validated_data['longitude']
-    
-    # Get all pending ride requests
-    pending_rides = RideRequest.objects.filter(
-        status='pending'
-    ).select_related('passenger')  # Optimize query
-    
-    # Calculate distance and filter rides within broadcast radius (500m)
-    nearby_rides_data = []
-    for ride in pending_rides:
-        # Calculate distance from driver to passenger pickup location
-        distance = calculate_distance(
-            driver_lat, driver_lon,
-            ride.pickup_latitude, ride.pickup_longitude
-        )
-        
-        # Only include rides within the broadcast radius (default 500m)
-        if distance <= ride.broadcast_radius:
-            ride_data = RideRequestSerializer(ride).data
-            ride_data['distance_from_driver'] = round(distance)  # Add distance in meters
-            nearby_rides_data.append(ride_data)
-    
-    # Sort rides by distance (closest first)
-    nearby_rides_data.sort(key=lambda x: x['distance_from_driver'])
-    
-    return Response({
-        'rides': nearby_rides_data,
-        'count': len(nearby_rides_data),
-    'broadcast_radius': 1000,  # Show the search radius
-        'driver_location': {
-            'latitude': float(driver_lat),
-            'longitude': float(driver_lon)
-        }
-    })
-
+# ------------------ for driver to be shifted -------------
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -833,29 +478,29 @@ def reject_ride_offer(request, ride_id):
     })
 
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def driver_current_ride(request):
-    """Get driver's current active ride"""
-    if request.user.role != 'driver':
-        return Response(
-            {'error': 'Only drivers can access this endpoint'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def driver_current_ride(request):
+#     """Get driver's current active ride"""
+#     if request.user.role != 'driver':
+#         return Response(
+#             {'error': 'Only drivers can access this endpoint'},
+#             status=status.HTTP_403_FORBIDDEN
+#         )
     
-    ride = RideRequest.objects.filter(
-        driver=request.user,
-        status='accepted'
-    ).first()
+#     ride = RideRequest.objects.filter(
+#         driver=request.user,
+#         status='accepted'
+#     ).first()
     
-    if not ride:
-        return Response(
-            {'message': 'No active ride found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+#     if not ride:
+#         return Response(
+#             {'message': 'No active ride found'},
+#             status=status.HTTP_404_NOT_FOUND
+#         )
     
-    serializer = RideRequestSerializer(ride)
-    return Response(serializer.data)
+#     serializer = RideRequestSerializer(ride)
+#     return Response(serializer.data)
 
 
 @api_view(['POST'])
