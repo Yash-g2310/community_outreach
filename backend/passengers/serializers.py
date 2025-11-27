@@ -56,20 +56,5 @@ class RequestLocationSerializer(serializers.Serializer):
     - Can be reused for both Passenger and Driver location inputs.
     """
 
-    latitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
-        required=True,
-        min_value=-90,
-        max_value=90,
-        help_text="Latitude between -90 and 90 degrees."
-    )
-
-    longitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
-        required=True,
-        min_value=-180,
-        max_value=180,
-        help_text="Longitude between -180 and 180 degrees."
-    )
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6)
