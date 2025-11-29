@@ -61,7 +61,7 @@ class _MultiPulsingCirclesState extends State<MultiPulsingCircles>
   Widget buildCircle(double size, double border, Color color) {
     return AnimatedBuilder(
       animation: _controller,
-      builder: (_, __) {
+      builder: (_, _) {
         return Transform.scale(
           scale: _scale.value,
           child: Opacity(
@@ -103,7 +103,7 @@ class _MultiPulsingCirclesState extends State<MultiPulsingCircles>
           // glow around inner ring
           AnimatedBuilder(
             animation: _controller,
-            builder: (_, __) {
+            builder: (_, _) {
               return Transform.scale(
                 scale: _scale.value,
                 child: Container(
