@@ -1,3 +1,4 @@
+from asgiref.sync import async_to_sync
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -5,20 +6,17 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from channels.layers import get_channel_layer
 
-from .consumers import notify_nearby_passengers_sync
-from .models import DriverProfile, RideRequest
+from drivers.models import DriverProfile
+from .models import RideRequest
 from .serializers import (
-    UserSerializer, DriverProfileSerializer, RideRequestSerializer,
-    RideRequestCreateSerializer, LocationUpdateSerializer,
-    DriverStatusSerializer, RideCancelSerializer
+    RideRequestSerializer,
+    RideRequestCreateSerializer,
+    RideCancelSerializer
 )
-from .notifications import (
-    build_offers_for_ride,
-    dispatch_next_offer,
-    notify_driver_event,
-    notify_passenger_event
-)
-from .utils import calculate_distance
+
+# Import from services layer
+from services.matching import build_offers_for_ride, dispatch_next_offer
+from realtime.notifications import notify_driver_event, notify_passenger_event
 
 
 # @api_view(['GET'])

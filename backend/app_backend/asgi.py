@@ -17,8 +17,8 @@ from channels.security.websocket import AllowedHostsOriginValidator
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'app_backend.settings')
 django_asgi_app = get_asgi_application()
 
-from rides.middleware import JWTOrCookieAuthMiddleware
-from rides.routing import websocket_urlpatterns
+from realtime.middleware import JWTOrCookieAuthMiddleware
+from realtime.routing import websocket_urlpatterns
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,

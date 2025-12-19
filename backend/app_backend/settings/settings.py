@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'drivers',
     'passengers',
     'rides',
+    'realtime',
 ]
  
 MIDDLEWARE = [
@@ -124,6 +125,39 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Kolkata'
 
+# Redis GEO Configuration (uses same Redis instance as Celery)
+REDIS_GEO_URL = 'redis://localhost:6379/1'  # Separate DB for GEO data
+
+# Django Channels Layer Configuration
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("localhost", 6379)],
+            "capacity": 1500,
+            "expiry": 60,
+        },
+    },
+}
+
+# Redis GEO Settings (can be overridden)
+REDIS_GEO_CONFIG = {
+    # Geohash precision for pub/sub channels
+    # Precision 5 = ~4.9km x 4.9km tiles
+    # Precision 6 = ~1.2km x 0.6km tiles (recommended for cities)
+    # Precision 7 = ~150m x 150m tiles
+    "GEOHASH_PRECISION": 6,
+    
+    # TTL values (seconds)
+    "DRIVER_LOCATION_TTL": 120,        # Driver location expires after 2 min
+    "DRIVER_META_TTL": 120,            # Driver metadata TTL
+    "PASSENGER_SUB_TTL": 300,          # Passenger subscription TTL (5 min)
+    
+    # Rate limiting
+    "MIN_UPDATE_DISTANCE_METERS": 10,  # Ignore updates if moved less than this
+    "MAX_UPDATES_PER_SECOND": 2,       # Rate limit per driver
+}
+
 CELERY_BEAT_SCHEDULE = {
     "run-test-task-every-10-seconds": {
         "task": "rides.tasks.test_task",
@@ -188,5 +222,10 @@ LOGGING = {
     'root': {'handlers': ['console'], 'level': 'INFO'},
     'loggers': {
         'rides.notifications': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'realtime': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'realtime.notifications': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'realtime.consumers': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'realtime.geo': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'realtime.broadcast': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
     },
 }

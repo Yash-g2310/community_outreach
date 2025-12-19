@@ -2,8 +2,8 @@ from django.utils import timezone
 
 from drivers.models import DriverProfile
 from rides.models import RideRequest
-from rides import notifications
-from rides.utils import calculate_distance
+from common.utils.geo import calculate_distance
+from realtime.broadcast import broadcast_driver_location, broadcast_driver_status
 
 
 class RideNotFoundError(Exception):
@@ -20,13 +20,21 @@ class RideNotAvailableError(Exception):
 def update_driver_status(profile: DriverProfile, new_status: str):
     """
     Update driver availability status.
-    This may broadcast events to WebSockets or trigger downstream logic.
+    This broadcasts status change to nearby passengers via WebSocket.
     """
     profile.status = new_status
     profile.save(update_fields=["status"])
 
-    # WebSocket: notify passenger groups OR global driver tracking groups
-    notifications.broadcast_driver_status(profile)
+    # WebSocket: notify nearby passengers of driver status change
+    if profile.current_latitude and profile.current_longitude:
+        broadcast_driver_status(
+            driver_id=profile.user_id,
+            status=new_status,
+            lat=float(profile.current_latitude),
+            lon=float(profile.current_longitude),
+            username=profile.user.username if profile.user else None,
+            vehicle_number=profile.vehicle_number,
+        )
 
     return profile
 
@@ -42,8 +50,16 @@ def update_driver_location(profile: DriverProfile, lat, lon):
     profile.last_location_update = timezone.now()
     profile.save(update_fields=["current_latitude", "current_longitude", "last_location_update"])
 
-    # Push to WebSocket passenger tracking channels
-    notifications.broadcast_driver_location(profile)
+    # Push location to nearby passengers via WebSocket
+    broadcast_driver_location(
+        driver_id=profile.user_id,
+        lat=float(lat),
+        lon=float(lon),
+        username=profile.user.username if profile.user else None,
+        vehicle_number=profile.vehicle_number,
+        status=profile.status,
+        force=True,  # Force since this is explicit HTTP call
+    )
 
     return profile
 
@@ -52,7 +68,6 @@ def update_driver_location(profile: DriverProfile, lat, lon):
 def find_nearby_pending_rides(lat, lon):
     """
     Find nearby pending ride requests (legacy fallback when WS is not active).
-    Your existing logic uses calculate_distance(), so we simply reuse that.
     """
     pending = RideRequest.objects.filter(status="pending")
 

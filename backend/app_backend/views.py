@@ -7,7 +7,7 @@ from rest_framework import status
 from channels.layers import get_channel_layer
 
 from rides.models import RideRequest
-from tasks.tasks import expire_ride_offer_task
+from rides.tasks import expire_ride_offer_task
 
 
 @api_view(["GET"])

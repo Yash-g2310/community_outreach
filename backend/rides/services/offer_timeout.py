@@ -1,3 +1,10 @@
+"""
+DEPRECATED: Service for processing stale ride offer timeouts.
+
+This module is kept for backward compatibility.
+Offer timeouts are now handled by Celery tasks (see rides/tasks.py).
+"""
+
 from datetime import timedelta
 from typing import Tuple
 
@@ -5,14 +12,18 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from rides.models import RideOffer
-from rides.notifications import expire_offer_and_dispatch
 
 
 def process_offer_timeouts(timeout_seconds: int = 10) -> Tuple[int, int]:
-    """Expire stale offers and attempt to dispatch the next driver.
+    """
+    DEPRECATED: Expire stale offers and attempt to dispatch the next driver.
+
+    This function is deprecated. Use Celery tasks for offer expiry instead.
+    The expire_ride_offer_task is scheduled when each offer is sent.
 
     Returns a tuple of (expired_count, dispatched_count).
     """
+    from services.matching import expire_offer_and_dispatch
 
     cutoff = timezone.now() - timedelta(seconds=timeout_seconds)
     stale_offers = (

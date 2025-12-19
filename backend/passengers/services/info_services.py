@@ -3,7 +3,7 @@
 from drivers.models import DriverProfile
 from rides.models import RideRequest
 from rides.serializers import RideRequestSerializer
-from rides.utils import calculate_distance
+from common.utils.geo import calculate_distance
 
 
 def get_passenger_profile(user):

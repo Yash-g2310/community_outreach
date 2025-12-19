@@ -296,7 +296,6 @@ class _DriverPageState extends State<DriverPage> {
             'Connection established: ${data['message'] ?? 'Connected'}',
           );
           break;
-<<<<<<< HEAD
         case 'ride_offer':
           final rideData = data['ride_data'];
           final offerId = data['offer_id'];
@@ -307,10 +306,6 @@ class _DriverPageState extends State<DriverPage> {
           }
           break;
         case 'new_ride_request':
-=======
-
-        case 'ride_offer':
->>>>>>> edf2390d38d2e851921650adde0e6ea1c7057ea6
           final rideData = data['ride'];
           if (rideData is Map) {
             // Only add incoming rides that are still pending. If the ride was

@@ -1,11 +1,10 @@
-from django.urls import re_path
-from . import consumers
+"""
+DEPRECATED: This module is kept for backward compatibility.
+Use realtime.routing instead.
 
-websocket_urlpatterns = [
-    # URL:= ws://localhost:8000/ws/app/
-    re_path(
-        r"ws/app/$", 
-        consumers.AppConsumer.as_asgi(),
-        name="app-ws"
-    ),
-]
+WebSocket routing has been moved to the realtime app.
+"""
+
+from realtime.routing import websocket_urlpatterns
+
+__all__ = ["websocket_urlpatterns"]

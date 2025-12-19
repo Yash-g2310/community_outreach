@@ -1,4 +1,4 @@
-"""Stores the Configuration for the Sequential Ride Offer Timeout Monitor"""
+"""Rides app configuration."""
 
 from django.apps import AppConfig
 
@@ -8,6 +8,6 @@ class RidesConfig(AppConfig):
     name = 'rides'
 
     def ready(self):
-        from .offer_timeout_monitor import start_offer_timeout_monitor
-
-        start_offer_timeout_monitor()
+        # Note: Offer timeouts are now handled by Celery tasks (see tasks.py)
+        # The old threading-based monitor has been deprecated.
+        pass

@@ -9,3 +9,11 @@ google-auth-oauthlib==1.2.1
 channels==4.0.0
 channels-redis==4.2.0
 daphne==4.1.0
+
+# Redis (for GEO and caching)
+redis==5.0.0
+
+# Celery (async task queue)
+celery==5.3.4
+python-dotenv==1.0.0
+Pillow==10.4.0

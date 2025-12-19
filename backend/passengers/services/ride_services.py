@@ -3,12 +3,8 @@ from django.db import transaction
 import logging
 
 from rides.models import RideRequest
-from rides.notifications import (
-    build_offers_for_ride,
-    dispatch_next_offer,
-    notify_passenger_event,
-    notify_driver_event,
-)
+from services.matching import build_offers_for_ride, dispatch_next_offer
+from realtime.notifications import notify_passenger_event, notify_driver_event
 
 from rides.serializers import RideRequestSerializer
 
