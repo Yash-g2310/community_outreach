@@ -18,6 +18,8 @@ import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
 import '../../router/app_router.dart';
+import '../../core/mixins/safe_state_mixin.dart';
+import '../../config/app_constants.dart';
 
 class DriverPage extends StatefulWidget {
   final String? jwtToken;
@@ -39,7 +41,7 @@ class DriverPage extends StatefulWidget {
   State<DriverPage> createState() => _DriverPageState();
 }
 
-class _DriverPageState extends State<DriverPage> {
+class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   bool isActive = true;
   bool isLoading = false;
   String? errorMessage;
@@ -107,7 +109,7 @@ class _DriverPageState extends State<DriverPage> {
         throw Exception('Unable to get current location.');
       }
 
-      _safeSetState(() {
+      safeSetState(() {
         _mapPosition = location;
       });
 
@@ -142,7 +144,7 @@ class _DriverPageState extends State<DriverPage> {
       _currentPosition = null; // Will be set from position stream
 
       // Update map position
-      _safeSetState(() {
+      safeSetState(() {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
@@ -179,8 +181,8 @@ class _DriverPageState extends State<DriverPage> {
     // and LocationService.getLocationStream() returns Stream<LatLng>.
     // LocationService is used for simple getCurrentLocation() calls.
     final locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 50,
+      accuracy: LocationConstants.defaultAccuracy,
+      distanceFilter: LocationConstants.defaultDistanceFilter,
     );
 
     _positionStreamSubscription =
@@ -378,7 +380,7 @@ class _DriverPageState extends State<DriverPage> {
       'Ride $rideId pushed to notifications (total=${notifications.length + 1})',
     );
 
-    _safeSetState(() {
+    safeSetState(() {
       final updated = List<Map<String, dynamic>>.from(notifications);
       final existingIndex = updated.indexWhere(
         (notif) => notif['id'] == rideId,
@@ -405,7 +407,7 @@ class _DriverPageState extends State<DriverPage> {
     }
 
     var removed = false;
-    _safeSetState(() {
+    safeSetState(() {
       final updated = notifications
           .where((notif) => notif['id'] != rideId)
           .toList();
@@ -419,10 +421,6 @@ class _DriverPageState extends State<DriverPage> {
     }
   }
 
-  void _safeSetState(VoidCallback fn) {
-    if (!mounted) return;
-    setState(fn);
-  }
 
   void _showSnackBar(String message, {Color backgroundColor = Colors.black87}) {
     if (!mounted) return;
@@ -438,7 +436,7 @@ class _DriverPageState extends State<DriverPage> {
     if (_currentPosition == null) {
       await _getCurrentLocation();
     }
-    _safeSetState(() {
+    safeSetState(() {
       _mapPosition = LatLng(position.latitude, position.longitude);
     });
 
@@ -485,13 +483,13 @@ class _DriverPageState extends State<DriverPage> {
 
   Future<void> _loadDriverData() async {
     if (widget.jwtToken == null) {
-      _safeSetState(() {
+      safeSetState(() {
         errorMessage = 'No authentication token found';
       });
       return;
     }
 
-    _safeSetState(() {
+    safeSetState(() {
       isLoading = true;
       errorMessage = null;
     });
@@ -505,11 +503,11 @@ class _DriverPageState extends State<DriverPage> {
         _startLocationUpdates();
       }
     } catch (e) {
-      _safeSetState(() {
+      safeSetState(() {
         errorMessage = 'Error loading driver data: $e';
       });
     } finally {
-      _safeSetState(() {
+      safeSetState(() {
         isLoading = false;
       });
     }
@@ -523,7 +521,7 @@ class _DriverPageState extends State<DriverPage> {
       final rejectedList =
           prefs.getStringList('rejected_rides_$driverId') ?? [];
 
-      _safeSetState(() {
+      safeSetState(() {
         _rejectedRideIds = rejectedList
             .map((id) => int.tryParse(id))
             .where((id) => id != null)
@@ -537,7 +535,7 @@ class _DriverPageState extends State<DriverPage> {
       );
     } catch (e) {
       Logger.error('Error loading rejected rides', error: e, tag: 'DriverPage');
-      _safeSetState(() {
+      safeSetState(() {
         _rejectedRideIds = {};
       });
     }
@@ -562,7 +560,7 @@ class _DriverPageState extends State<DriverPage> {
 
   // Add a ride ID to rejected list
   Future<void> _addRejectedRide(int rideId) async {
-    _safeSetState(() {
+    safeSetState(() {
       _rejectedRideIds.add(rideId);
     });
     await _saveRejectedRides();
@@ -584,7 +582,7 @@ class _DriverPageState extends State<DriverPage> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        _safeSetState(() {
+        safeSetState(() {
           driverProfile = data;
           // Update isActive based on driver status
           isActive = data['status'] == 'available';
@@ -603,7 +601,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _updateDriverStatus(bool active) async {
     if (widget.jwtToken == null) return;
 
-    _safeSetState(() {
+    safeSetState(() {
       isLoading = true;
     });
 
@@ -635,7 +633,7 @@ class _DriverPageState extends State<DriverPage> {
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        _safeSetState(() {
+        safeSetState(() {
           isActive = active;
         });
 
@@ -646,7 +644,7 @@ class _DriverPageState extends State<DriverPage> {
         } else {
           _stopLocationUpdates();
           // Clear notifications when going offline
-          _safeSetState(() {
+          safeSetState(() {
             notifications = [];
           });
         }
@@ -661,7 +659,7 @@ class _DriverPageState extends State<DriverPage> {
     } catch (e) {
       _showSnackBar('Error updating status: $e', backgroundColor: Colors.red);
     } finally {
-      _safeSetState(() {
+      safeSetState(() {
         isLoading = false;
       });
     }
@@ -672,7 +670,7 @@ class _DriverPageState extends State<DriverPage> {
 
     final rideId = notification['id'] as int;
 
-    _safeSetState(() {
+    safeSetState(() {
       isLoading = true;
     });
 
@@ -689,7 +687,7 @@ class _DriverPageState extends State<DriverPage> {
 
       if (response.statusCode == 200) {
         // Remove the accepted ride from notifications
-        _safeSetState(() {
+        safeSetState(() {
           notifications.removeWhere((notif) => notif['id'] == rideId);
         });
 
@@ -734,7 +732,7 @@ class _DriverPageState extends State<DriverPage> {
     } catch (e) {
       _showSnackBar('Error accepting ride: $e', backgroundColor: Colors.red);
     } finally {
-      _safeSetState(() {
+      safeSetState(() {
         isLoading = false;
       });
     }
@@ -743,7 +741,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _rejectRide(int rideId) async {
     if (widget.jwtToken == null) return;
 
-    _safeSetState(() {
+    safeSetState(() {
       isLoading = true;
     });
 
@@ -764,7 +762,7 @@ class _DriverPageState extends State<DriverPage> {
         await _addRejectedRide(rideId);
 
         // Remove the rejected ride from current notifications
-        _safeSetState(() {
+        safeSetState(() {
           notifications.removeWhere((notif) => notif['id'] == rideId);
         });
 
@@ -783,7 +781,7 @@ class _DriverPageState extends State<DriverPage> {
     } catch (e) {
       _showSnackBar('Error rejecting ride: $e', backgroundColor: Colors.red);
     } finally {
-      _safeSetState(() {
+      safeSetState(() {
         isLoading = false;
       });
     }

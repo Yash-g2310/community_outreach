@@ -13,6 +13,7 @@ import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
 import '../../router/app_router.dart';
+import '../../core/mixins/safe_state_mixin.dart';
 
 class UserTrackingPage extends StatefulWidget {
   final String? jwtToken;
@@ -34,7 +35,8 @@ class UserTrackingPage extends StatefulWidget {
   State<UserTrackingPage> createState() => _UserTrackingPageState();
 }
 
-class _UserTrackingPageState extends State<UserTrackingPage> {
+class _UserTrackingPageState extends State<UserTrackingPage>
+    with SafeStateMixin {
   LatLng? _userPosition;
   LatLng? _driverPosition;
 
@@ -103,7 +105,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
 
       if (location == null || !mounted) return;
 
-      _safeSetState(() {
+      safeSetState(() {
         _userPosition = location;
       });
     } catch (e) {
@@ -136,7 +138,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           final ride = data['ride'];
           final driver = ride['driver'];
 
-          _safeSetState(() {
+          safeSetState(() {
             final id = ride['id'];
             _currentRideId = id is int
                 ? id
@@ -268,14 +270,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           }
 
           if (lat != null && lng != null) {
-            _safeSetState(() {
+            safeSetState(() {
               _driverPosition = LatLng(lat!, lng!);
             });
           }
           break;
 
         case 'ride_cancelled':
-          _safeSetState(() {
+          safeSetState(() {
             _status = 'cancelled';
           });
 
@@ -328,7 +330,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           break;
 
         case 'ride_completed':
-          _safeSetState(() {
+          safeSetState(() {
             _status = 'completed';
           });
 
@@ -438,11 +440,6 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       Logger.error('Error cancelling ride', error: e, tag: 'UserTracking');
       return false;
     }
-  }
-
-  void _safeSetState(VoidCallback fn) {
-    if (!mounted) return;
-    setState(fn);
   }
 
   @override

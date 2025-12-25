@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'user_page.dart';
 import '../../config/api_endpoints.dart';
+import '../../config/app_constants.dart';
 import '../../services/error_service.dart';
 
 class RideLoadingPage extends StatefulWidget {
@@ -41,7 +42,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: UIConstants.defaultAnimationDuration,
     )..repeat(reverse: true);
 
     _innerScale = Tween<double>(

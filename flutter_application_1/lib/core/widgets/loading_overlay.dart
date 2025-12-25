@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../config/app_constants.dart';
 
 class LoadingOverlay extends StatelessWidget {
   const LoadingOverlay({super.key});
@@ -34,7 +35,7 @@ class _MultiPulsingCirclesState extends State<MultiPulsingCircles>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: UIConstants.defaultAnimationDuration,
     )..repeat(reverse: true);
 
     _scale = Tween<double>(

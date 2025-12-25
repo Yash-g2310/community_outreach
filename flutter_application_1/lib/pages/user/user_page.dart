@@ -18,6 +18,7 @@ import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
 import '../../router/app_router.dart';
+import '../../core/mixins/safe_state_mixin.dart';
 
 class UserMapScreen extends StatefulWidget {
   final String? jwtToken;
@@ -39,7 +40,7 @@ class UserMapScreen extends StatefulWidget {
   State<UserMapScreen> createState() => _UserMapScreenState();
 }
 
-class _UserMapScreenState extends State<UserMapScreen> {
+class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   LatLng? _currentPosition;
   bool _isLoading = false;
   final _isLoadingDrivers = false;
@@ -100,7 +101,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         throw Exception('Unable to get current location.');
       }
 
-      _safeSetState(() {
+      safeSetState(() {
         _currentPosition = location;
       });
 
@@ -310,7 +311,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
     // Only action needed: remove driver if explicitly offline
     if (status == "offline" || status == "busy") {
-      _safeSetState(() {
+      safeSetState(() {
         _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
       });
     }
@@ -337,7 +338,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         data['vehicle_no']?.toString() ??
         "N/A";
 
-    _safeSetState(() {
+    safeSetState(() {
       final index = _nearbyDrivers.indexWhere(
         (d) => d['driver_id'] == driverId,
       );
@@ -402,7 +403,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       return;
     }
 
-    _safeSetState(() {
+    safeSetState(() {
       _isLoading = true;
     });
 
@@ -482,7 +483,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         'Network error. Please check your connection.',
       );
     } finally {
-      _safeSetState(() {
+      safeSetState(() {
         _isLoading = false;
       });
     }
@@ -548,11 +549,6 @@ class _UserMapScreenState extends State<UserMapScreen> {
         );
       },
     );
-  }
-
-  void _safeSetState(VoidCallback fn) {
-    if (!mounted) return;
-    setState(fn);
   }
 
   @override

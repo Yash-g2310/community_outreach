@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../config/app_constants.dart';
 import 'logger_service.dart';
 
 /// Centralized error handling service
@@ -98,7 +99,7 @@ class ErrorService {
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.red,
-        duration: duration ?? const Duration(seconds: 4),
+        duration: duration ?? UIConstants.errorMessageDuration,
         action: SnackBarAction(
           label: 'Dismiss',
           textColor: Colors.white,
@@ -129,7 +130,7 @@ class ErrorService {
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.green,
-        duration: duration ?? const Duration(seconds: 3),
+        duration: duration ?? UIConstants.successMessageDuration,
         action: SnackBarAction(
           label: 'OK',
           textColor: Colors.white,

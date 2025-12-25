@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../utils/ws_utils.dart';
 import '../utils/socket_channel_factory.dart';
+import '../config/app_constants.dart';
 import 'logger_service.dart';
 
 /// Centralized WebSocket service for managing connections
@@ -38,8 +39,10 @@ class WebSocketService {
   String? _driverSessionId;
   String? _driverCsrfToken;
 
-  static const int _maxReconnectAttempts = 5;
-  static const Duration _baseReconnectDelay = Duration(seconds: 2);
+  static const int _maxReconnectAttempts =
+      WebSocketConstants.maxReconnectAttempts;
+  static const Duration _baseReconnectDelay =
+      WebSocketConstants.baseReconnectDelay;
 
   /// Get stream of passenger messages
   Stream<Map<String, dynamic>> get passengerMessages =>

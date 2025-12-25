@@ -12,6 +12,8 @@ import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
 import '../../router/app_router.dart';
+import '../../core/mixins/safe_state_mixin.dart';
+import '../../config/app_constants.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -51,7 +53,7 @@ class RideTrackingPage extends StatefulWidget {
   State<RideTrackingPage> createState() => _RideTrackingPageState();
 }
 
-class _RideTrackingPageState extends State<RideTrackingPage> {
+class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin {
   LatLng? _currentPosition;
   String _rideStatus = 'accepted';
   bool _isLoading = false;
@@ -124,7 +126,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
       if (location == null || !mounted) return;
 
-      _safeSetState(() {
+      safeSetState(() {
         _currentPosition = location;
       });
     } catch (e) {
@@ -138,7 +140,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
   // Location updates only, ride status handled by WebSocket
   void _startLocationUpdates() {
-    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    _locationTimer = Timer.periodic(TimerConstants.locationUpdateInterval, (timer) {
       _getCurrentLocation();
     });
   }
@@ -194,14 +196,14 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
       switch (eventType) {
         case 'ride_cancelled':
-          _safeSetState(() => _rideStatus = 'cancelled');
+          safeSetState(() => _rideStatus = 'cancelled');
 
           final msg = data['message'] ?? 'Ride cancelled';
           messenger.showSnackBar(
             SnackBar(backgroundColor: Colors.orange, content: Text(msg)),
           );
 
-          Future.delayed(const Duration(seconds: 2), () async {
+          Future.delayed(UIConstants.shortDelay, () async {
             if (!mounted) return;
             // For drivers, navigate back to the main DriverPage instead of
             // popping (which can expose a previous auth/login route).
@@ -228,20 +230,20 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           break;
 
         case 'ride_expired':
-          _safeSetState(() => _rideStatus = 'expired');
+          safeSetState(() => _rideStatus = 'expired');
 
           final msg = data['message'] ?? 'Ride offer expired';
           messenger.showSnackBar(
             SnackBar(backgroundColor: Colors.red, content: Text(msg)),
           );
 
-          Future.delayed(const Duration(seconds: 2), () {
+          Future.delayed(UIConstants.shortDelay, () {
             if (mounted) Navigator.pop(context);
           });
           break;
 
         case 'ride_completed':
-          _safeSetState(() => _rideStatus = 'completed');
+          safeSetState(() => _rideStatus = 'completed');
 
           // Stop tracking best-effort
           try {
@@ -275,7 +277,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   Future<void> _completeRide() async {
     if (widget.accessToken == null) return;
 
-    _safeSetState(() {
+        safeSetState(() {
       _isLoading = true;
     });
 
@@ -291,7 +293,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        _safeSetState(() {
+        safeSetState(() {
           _rideStatus = 'completed';
         });
 
@@ -329,7 +331,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       }
     } finally {
       if (mounted) {
-        _safeSetState(() {
+        safeSetState(() {
           _isLoading = false;
         });
       }
@@ -366,7 +368,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       return;
     }
 
-    _safeSetState(() {
+        safeSetState(() {
       _isLoading = true;
     });
 
@@ -400,7 +402,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       if (response.statusCode == 200) {
         Logger.info('Ride cancelled successfully.', tag: 'DriverTracking');
 
-        _safeSetState(() {
+        safeSetState(() {
           _rideStatus = 'cancelled';
         });
 
@@ -442,17 +444,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       }
     } finally {
       if (mounted) {
-        _safeSetState(() {
+        safeSetState(() {
           _isLoading = false;
         });
       }
     }
   }
 
-  void _safeSetState(VoidCallback fn) {
-    if (!mounted) return;
-    setState(fn);
-  }
 
   @override
   Widget build(BuildContext context) {

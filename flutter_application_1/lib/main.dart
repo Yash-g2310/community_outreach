@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'config/constants.dart';
+import 'config/app_constants.dart';
 import 'router/app_router.dart';
 import 'services/auth_service.dart';
 import 'core/theme/app_theme.dart';
@@ -12,7 +13,7 @@ void main() async {
   // Wrap in try-catch with timeout to prevent VM crashes
   try {
     await loadEnvConfig().timeout(
-      const Duration(milliseconds: 500),
+      NetworkConstants.envConfigTimeout,
       onTimeout: () => false,
     );
   } catch (e) {
