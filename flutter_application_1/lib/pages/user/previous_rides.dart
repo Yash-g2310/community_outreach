@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../../config/constants.dart';
+import '../../services/logger_service.dart';
+import '../../services/error_service.dart';
 
 class PreviousRidesPage extends StatefulWidget {
   final String jwtToken;
@@ -21,6 +23,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
   List<Map<String, dynamic>> previousRides = [];
   bool isLoading = true;
   late bool isDriver; // true = driver, false = passenger
+  final ErrorService _errorService = ErrorService();
 
   @override
   void initState() {
@@ -52,23 +55,17 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
         });
       } else {
         final lastError = '${res.statusCode} ${res.body}';
-        print('PreviousRides: $endpoint -> $lastError');
+        Logger.error('PreviousRides: $endpoint -> $lastError', tag: 'PreviousRides');
         setState(() => isLoading = false);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to load previous rides: $lastError'),
-            ),
-          );
+          _errorService.showError(context, 'Failed to load previous rides: $lastError');
         }
       }
     } catch (e) {
-      print('PreviousRides: host $kBaseUrl exception: $e');
+      Logger.error('PreviousRides: host $kBaseUrl exception: $e', tag: 'PreviousRides');
       setState(() => isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load previous rides: $e')),
-        );
+        _errorService.showError(context, 'Failed to load previous rides: $e');
       }
     }
   }

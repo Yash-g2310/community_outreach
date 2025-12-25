@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'config/constants.dart';
 import 'router/app_router.dart';
 import 'services/auth_service.dart';
+import 'core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -40,6 +41,9 @@ class MyApp extends StatelessWidget {
       initialRoute: initialRoute,
       onGenerateRoute: AppRouter.generateRoute,
       title: 'E-Rick Connect',
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system, // Automatically switch based on system settings
     );
   }
 }

@@ -14,6 +14,8 @@ import '../user/previous_rides.dart';
 import '../../config/constants.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
+import '../../services/logger_service.dart';
+import '../../services/error_service.dart';
 import '../../router/app_router.dart';
 
 class DriverPage extends StatefulWidget {
@@ -53,6 +55,7 @@ class _DriverPageState extends State<DriverPage> {
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
   StreamSubscription<Position>? _positionStreamSubscription;
+  final ErrorService _errorService = ErrorService();
 
   @override
   void initState() {
@@ -69,7 +72,7 @@ class _DriverPageState extends State<DriverPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      print('Error cancelling WebSocket subscription: $e');
+      Logger.error('Error cancelling WebSocket subscription', error: e, tag: 'DriverPage');
     }
 
     // Ensure server marks driver offline when the app/widget is disposed
@@ -111,10 +114,10 @@ class _DriverPageState extends State<DriverPage> {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
-      print('Initial Location: ${position.latitude}, ${position.longitude}');
+      Logger.debug('Initial Location: ${position.latitude}, ${position.longitude}', tag: 'DriverPage');
       // Location updates will be started after loading driver profile
     } catch (e) {
-      print('Error initializing location: $e');
+      Logger.error('Error initializing location', error: e, tag: 'DriverPage');
     }
   }
 
@@ -131,13 +134,13 @@ class _DriverPageState extends State<DriverPage> {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
-      print('Current location: ${position.latitude}, ${position.longitude}');
+      Logger.debug('Current location: ${position.latitude}, ${position.longitude}', tag: 'DriverPage');
 
       if (widget.jwtToken != null) {
         _connectDriverSocket();
       }
     } catch (e) {
-      print('Error getting current location: $e');
+      Logger.error('Error getting current location', error: e, tag: 'DriverPage');
     }
   }
 
@@ -175,17 +178,17 @@ class _DriverPageState extends State<DriverPage> {
       _locationUpdateTimer?.cancel();
       _locationUpdateTimer = null;
     } catch (e) {
-      print('Error cancelling location update timer: $e');
+      Logger.error('Error cancelling location update timer', error: e, tag: 'DriverPage');
     }
 
     try {
       _positionStreamSubscription?.cancel();
       _positionStreamSubscription = null;
     } catch (e) {
-      print('Error cancelling position stream subscription: $e');
+      Logger.error('Error cancelling position stream subscription', error: e, tag: 'DriverPage');
     }
 
-    print('Location update stream/timer stopped');
+    Logger.debug('Location update stream/timer stopped', tag: 'DriverPage');
   }
 
   void _logDriver(String message, {String tag = 'Driver'}) {
@@ -207,13 +210,13 @@ class _DriverPageState extends State<DriverPage> {
       // Subscribe to driver messages
       _wsSubscription = _wsService.driverMessages.listen((data) {
         if (!mounted) return;
-        print("DRIVER WS RAW → $data");
+        Logger.websocket("DRIVER WS RAW → $data", tag: 'DriverPage');
         _handleDriverSocketMessage(data);
       });
 
       _logSocket('Driver WebSocket connected via service');
     } catch (e) {
-      print('Failed to connect driver WebSocket: $e');
+      Logger.error('Failed to connect driver WebSocket', error: e, tag: 'DriverPage');
     }
   }
 
@@ -285,10 +288,10 @@ class _DriverPageState extends State<DriverPage> {
           break;
 
         default:
-          print('Unhandled WS event: $data');
+          Logger.warning('Unhandled WS event: $data', tag: 'DriverPage');
       }
     } catch (e) {
-      print('Error decoding driver WS message: $e | raw=$data');
+      Logger.error('Error decoding driver WS message: $e | raw=$data', tag: 'DriverPage');
     }
   }
 
@@ -387,9 +390,11 @@ class _DriverPageState extends State<DriverPage> {
 
   void _showSnackBar(String message, {Color backgroundColor = Colors.black87}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: backgroundColor),
-    );
+    if (backgroundColor == Colors.green || backgroundColor == Colors.orange) {
+      _errorService.showSuccess(context, message);
+    } else {
+      _errorService.showError(context, message);
+    }
   }
 
   Future<void> _sendLocationToServer(Position position) async {
@@ -410,8 +415,9 @@ class _DriverPageState extends State<DriverPage> {
       );
 
       if (_currentRideId != null) {
-        print(
+        Logger.websocket(
           'Sending Tracking Update for ride $_currentRideId: $truncatedLatitude, $truncatedLongitude',
+          tag: 'DriverPage',
         );
 
         _wsService.sendDriverMessage({
@@ -421,8 +427,9 @@ class _DriverPageState extends State<DriverPage> {
           'longitude': truncatedLongitude,
         });
       } else if (isActive) {
-        print(
+        Logger.websocket(
           'Sending Updated Location via WS (stream): $truncatedLatitude, $truncatedLongitude',
+          tag: 'DriverPage',
         );
 
         _wsService.sendDriverMessage({
@@ -432,7 +439,7 @@ class _DriverPageState extends State<DriverPage> {
         });
       }
     } catch (e) {
-      print('Error sending driver location via WebSocket: $e');
+      Logger.error('Error sending driver location via WebSocket', error: e, tag: 'DriverPage');
     }
   }
 
@@ -484,11 +491,12 @@ class _DriverPageState extends State<DriverPage> {
             .toSet();
       });
 
-      print(
+      Logger.debug(
         'Loaded ${_rejectedRideIds.length} rejected rides from local storage: $_rejectedRideIds',
+        tag: 'DriverPage',
       );
     } catch (e) {
-      print('Error loading rejected rides: $e');
+      Logger.error('Error loading rejected rides', error: e, tag: 'DriverPage');
       _safeSetState(() {
         _rejectedRideIds = {};
       });
@@ -503,9 +511,9 @@ class _DriverPageState extends State<DriverPage> {
       final rejectedList = _rejectedRideIds.map((id) => id.toString()).toList();
 
       await prefs.setStringList('rejected_rides_$driverId', rejectedList);
-      print('Saved ${_rejectedRideIds.length} rejected rides to local storage');
+      Logger.debug('Saved ${_rejectedRideIds.length} rejected rides to local storage', tag: 'DriverPage');
     } catch (e) {
-      print('Error saving rejected rides: $e');
+      Logger.error('Error saving rejected rides', error: e, tag: 'DriverPage');
     }
   }
 
@@ -515,8 +523,9 @@ class _DriverPageState extends State<DriverPage> {
       _rejectedRideIds.add(rideId);
     });
     await _saveRejectedRides();
-    print(
+    Logger.debug(
       'Added ride $rideId to rejected list. Total rejected: ${_rejectedRideIds.length}',
+      tag: 'DriverPage',
     );
   }
 
@@ -543,7 +552,7 @@ class _DriverPageState extends State<DriverPage> {
         );
       }
     } catch (e) {
-      print('Driver profile error: $e');
+      Logger.error('Driver profile error', error: e, tag: 'DriverPage');
       rethrow;
     }
   }
@@ -723,7 +732,7 @@ class _DriverPageState extends State<DriverPage> {
           backgroundColor: Colors.orange,
         );
 
-        print('Ride $rideId rejected (server acknowledged) and hidden locally');
+        Logger.info('Ride $rideId rejected (server acknowledged) and hidden locally', tag: 'DriverPage');
       } else {
         throw Exception('Failed to reject ride: ${response.statusCode}');
       }
@@ -749,7 +758,7 @@ class _DriverPageState extends State<DriverPage> {
         body: json.encode({'status': 'offline'}),
       );
     } catch (e) {
-      print('Error sending offline status on dispose: $e');
+      Logger.error('Error sending offline status on dispose', error: e, tag: 'DriverPage');
     }
   }
 
@@ -909,12 +918,9 @@ class _DriverPageState extends State<DriverPage> {
                 );
               } else if (value == 'rides') {
                 if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'No access token available. Please login to view previous rides.',
-                      ),
-                    ),
+                  _errorService.showError(
+                    context,
+                    'No access token available. Please login to view previous rides.',
                   );
                   return;
                 }

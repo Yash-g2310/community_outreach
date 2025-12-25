@@ -10,6 +10,8 @@ import 'package:http/http.dart' as http;
 import 'user_page.dart'; // for navigation back to user page
 import '../../config/constants.dart';
 import '../../services/websocket_service.dart';
+import '../../services/logger_service.dart';
+import '../../services/error_service.dart';
 
 class UserTrackingPage extends StatefulWidget {
   final String? jwtToken;
@@ -44,6 +46,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
   final Set<String> _processedRideEvents = <String>{};
+  final ErrorService _errorService = ErrorService();
 
   @override
   void initState() {
@@ -75,7 +78,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      print('Error cancelling tracking subscription: $e');
+      Logger.error('Error cancelling tracking subscription', error: e, tag: 'UserTracking');
     }
     super.dispose();
   }
@@ -100,7 +103,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         _userPosition = LatLng(pos.latitude, pos.longitude);
       });
     } catch (e) {
-      print('Error getting user location: $e');
+      Logger.error('Error getting user location', error: e, tag: 'UserTracking');
     }
   }
 
@@ -139,11 +142,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             }
           });
 
-          print('Ride ID: $_currentRideId, Driver: $_username');
+          Logger.debug('Ride ID: $_currentRideId, Driver: $_username', tag: 'UserTracking');
         }
       }
     } catch (e) {
-      print('Error getting ride info: $e');
+      Logger.error('Error getting ride info', error: e, tag: 'UserTracking');
     }
   }
 
@@ -154,7 +157,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'type': 'start_tracking',
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
-      print('Sent start_tracking for ride $_currentRideId');
+      Logger.websocket('Sent start_tracking for ride $_currentRideId', tag: 'UserTracking');
     }
   }
 
@@ -165,7 +168,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'type': 'stop_tracking',
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
-      print('Sent stop_tracking for ride $_currentRideId');
+      Logger.websocket('Sent stop_tracking for ride $_currentRideId', tag: 'UserTracking');
     }
   }
 
@@ -193,7 +196,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       }
       return null;
     } catch (e) {
-      print('Error getting current ride ID: $e');
+      Logger.error('Error getting current ride ID', error: e, tag: 'UserTracking');
       return null;
     }
   }
@@ -214,7 +217,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         _processedRideEvents.add(dedupeKey);
       }
 
-      print('Tracking WS message event: $eventType');
+      Logger.websocket('Tracking WS message event: $eventType', tag: 'UserTracking');
 
       switch (eventType) {
         case 'driver_track_location':
@@ -267,8 +270,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                     try {
                       await _wsSubscription?.cancel();
                     } catch (e) {
-                      print(
-                        'Error cancelling tracking subscription on ride_cancelled: $e',
+                      Logger.error(
+                        'Error cancelling tracking subscription on ride_cancelled',
+                        error: e,
+                        tag: 'UserTracking',
                       );
                     }
                     if (!mounted) return;
@@ -325,8 +330,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             try {
               await _wsSubscription?.cancel();
             } catch (e) {
-              print(
-                'Error cancelling tracking subscription on ride_completed: $e',
+              Logger.error(
+                'Error cancelling tracking subscription on ride_completed',
+                error: e,
+                tag: 'UserTracking',
               );
             }
             if (!mounted) return;
@@ -348,7 +355,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         // ignore other events
       }
     } catch (e) {
-      print('Error decoding tracking WS message: $e | raw=$data');
+      Logger.error('Error decoding tracking WS message: $e | raw=$data', tag: 'UserTracking');
     }
   }
 
@@ -361,11 +368,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       final rideId = await _getCurrentRideId();
 
       if (rideId == null) {
-        print('No active ride found to cancel');
+        Logger.warning('No active ride found to cancel', tag: 'UserTracking');
         return false;
       }
 
-      print('Attempting to cancel ride $rideId...');
+      Logger.info('Attempting to cancel ride $rideId...', tag: 'UserTracking');
 
       final response = await http.post(
         Uri.parse('$kBaseUrl/api/rides/passenger/$rideId/cancel/'),
@@ -375,21 +382,22 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         },
       );
 
-      print('Cancel response status: ${response.statusCode}');
-      print('Cancel response body: ${response.body}');
+      Logger.network('Cancel response status: ${response.statusCode}', tag: 'UserTracking');
+      Logger.debug('Cancel response body: ${response.body}', tag: 'UserTracking');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        print(
+        Logger.info(
           'Ride cancelled successfully: ${data['message'] ?? 'No message'}',
+          tag: 'UserTracking',
         );
         return true;
       } else {
-        print('Failed to cancel ride: ${response.body}');
+        Logger.error('Failed to cancel ride: ${response.body}', tag: 'UserTracking');
         return false;
       }
     } catch (e) {
-      print('Error cancelling ride: $e');
+      Logger.error('Error cancelling ride', error: e, tag: 'UserTracking');
       return false;
     }
   }
@@ -408,7 +416,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
-            print('Navigating back from tracking to user page');
+            Logger.debug('Navigating back from tracking to user page', tag: 'UserTracking');
 
             // Cancel local subscription only - WebSocket service persists
             _wsSubscription?.cancel();
@@ -520,8 +528,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                               (_status == 'completed' || _status == 'cancelled')
                               ? null
                               : () async {
-                                  print(
+                                  Logger.info(
                                     'User cancelled ride from tracking page',
+                                    tag: 'UserTracking',
                                   );
 
                                   // Show confirmation dialog first
@@ -585,13 +594,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                   Navigator.pop(context);
 
                                   if (success) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Ride cancelled successfully',
-                                        ),
-                                        backgroundColor: Colors.green,
-                                      ),
+                                    _errorService.showSuccess(
+                                      context,
+                                      'Ride cancelled successfully',
                                     );
 
                                     // Cancel local listener and navigate back to UserMapScreen
@@ -610,13 +615,9 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                       ),
                                     );
                                   } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Failed to cancel ride. Please try again.',
-                                        ),
-                                        backgroundColor: Colors.red,
-                                      ),
+                                    _errorService.showError(
+                                      context,
+                                      'Failed to cancel ride. Please try again.',
                                     );
                                   }
                                 },

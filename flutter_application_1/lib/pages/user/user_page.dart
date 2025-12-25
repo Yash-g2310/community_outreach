@@ -15,6 +15,8 @@ import 'user_tracking_page.dart';
 import 'ride_loading_page.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
+import '../../services/logger_service.dart';
+import '../../services/error_service.dart';
 import '../../router/app_router.dart';
 
 class UserMapScreen extends StatefulWidget {
@@ -47,6 +49,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
   final Set<String> _processedRideEvents = <String>{};
+  final ErrorService _errorService = ErrorService();
 
   // Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -74,7 +77,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      print('Error cancelling WebSocket subscription: $e');
+      Logger.error('Error cancelling WebSocket subscription', error: e, tag: 'UserPage');
     }
 
     // Dispose controllers
@@ -108,7 +111,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
 
-      print('Current location: ${position.latitude}, ${position.longitude}');
+      Logger.debug('Current location: ${position.latitude}, ${position.longitude}', tag: 'UserPage');
 
       if (widget.jwtToken != null) {
         _connectPassengerSocket();
@@ -133,7 +136,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       // Subscribe to passenger messages
       _wsSubscription = _wsService.passengerMessages.listen((data) {
         if (!mounted) return;
-        print("WS RAW → $data");
+        Logger.websocket("WS RAW → $data", tag: 'UserPage');
         _handlePassengerSocketMessage(data);
       });
 
@@ -145,14 +148,14 @@ class _UserMapScreenState extends State<UserMapScreen> {
           "longitude": _currentPosition!.longitude,
           "radius": 1500,
         });
-        print("Sent Websocket for Nearby Drivers to backend");
+        Logger.websocket("Sent Websocket for Nearby Drivers to backend", tag: 'UserPage');
       } else {
-        print("Cannot subscribe_nearby — currentPosition is null");
+        Logger.warning("Cannot subscribe_nearby — currentPosition is null", tag: 'UserPage');
       }
 
-      print('Passenger WebSocket connected via service (user_page)');
+      Logger.websocket('Passenger WebSocket connected via service (user_page)', tag: 'UserPage');
     } catch (e) {
-      print('Failed to connect passenger WebSocket: $e');
+      Logger.error('Failed to connect passenger WebSocket', error: e, tag: 'UserPage');
     }
   }
 
@@ -175,13 +178,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _processedRideEvents.add(dedupeKey);
       }
 
-      print('Passenger WS event on user_page: $eventType');
+      Logger.websocket('Passenger WS event on user_page: $eventType', tag: 'UserPage');
 
       switch (eventType) {
         case 'ride_accepted':
           // Driver accepted the ride. Navigate to tracking page.
           // WebSocket service persists, so no transfer needed.
-          print('Driver accepted ride (user_page) — opening tracking page');
+          Logger.info('Driver accepted ride (user_page) — opening tracking page', tag: 'UserPage');
 
           // If a loading screen is on top, pop it first so replacement
           // correctly shows the tracking page.
@@ -210,9 +213,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             try {
               Navigator.pop(context);
             } catch (e) {
-              // Logger would be better but keeping print for now to avoid circular dependency
-              // ignore: avoid_print
-              print('Warning popping loading screen on ride_cancelled: $e');
+              Logger.warning('Warning popping loading screen on ride_cancelled: $e', tag: 'UserPage');
             }
           }
           final String cancelMsg = data['message'] ?? 'Ride was cancelled.';
@@ -224,7 +225,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             try {
               Navigator.pop(context);
             } catch (e) {
-              print('Warning popping loading screen on ride_expired: $e');
+              Logger.warning('Warning popping loading screen on ride_expired: $e', tag: 'UserPage');
             }
           }
           final String expiredMsg =
@@ -238,8 +239,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
             try {
               Navigator.pop(context);
             } catch (e) {
-              print(
+              Logger.warning(
                 'Warning popping loading screen on no_drivers_available: $e',
+                tag: 'UserPage',
               );
             }
           }
@@ -262,10 +264,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         default:
-          print('Unhandled passenger WS event: $eventType');
+          Logger.warning('Unhandled passenger WS event: $eventType', tag: 'UserPage');
       }
     } catch (e) {
-      print('Error parsing passenger WebSocket message: $e');
+      Logger.error('Error parsing passenger WebSocket message', error: e, tag: 'UserPage');
     }
   }
 
@@ -278,7 +280,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
     if (driverId == null || !mounted) return;
 
-    print("Driver $driverId status changed → $status");
+    Logger.debug("Driver $driverId status changed → $status", tag: 'UserPage');
 
     // Only action needed: remove driver if explicitly offline
     if (status == "offline" || status == "busy") {
@@ -299,7 +301,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
     final double? longitude = (data['longitude'] as num?)?.toDouble();
 
     if (driverId == null || latitude == null || longitude == null) {
-      print("Ignoring invalid location update.");
+      Logger.warning("Ignoring invalid location update.", tag: 'UserPage');
       return;
     }
 
@@ -382,7 +384,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         'number_of_passengers': passengers,
       };
 
-      print('Creating ride request: $rideData');
+      Logger.info('Creating ride request: $rideData', tag: 'UserPage');
 
       final response = await http.post(
         Uri.parse('$kBaseUrl/api/rides/passenger/request/'),
@@ -393,8 +395,8 @@ class _UserMapScreenState extends State<UserMapScreen> {
         body: json.encode(rideData),
       );
 
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
+      Logger.network('Response status: ${response.statusCode}', tag: 'UserPage');
+      Logger.debug('Response body: ${response.body}', tag: 'UserPage');
 
       if (response.statusCode == 201) {
         final responseData = json.decode(response.body);
@@ -432,7 +434,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _showErrorSnackBar('Unexpected error. Please try again.');
       }
     } catch (e) {
-      print('Network error: $e');
+      Logger.error('Network error', error: e, tag: 'UserPage');
       _showErrorSnackBar('Network error. Please check your connection.');
     } finally {
       _safeSetState(() {
@@ -442,23 +444,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
   }
 
   void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 4),
-      ),
-    );
+    _errorService.showError(context, message);
   }
 
   void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 4),
-      ),
-    );
+    _errorService.showSuccess(context, message);
   }
 
   // Show an AlertDialog for important passenger events (cancel/expired/no drivers)
@@ -501,7 +491,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             ),
             TextButton(
               onPressed: () async {
-                print('User Logged out');
+                Logger.info('User Logged out', tag: 'UserPage');
 
                 Navigator.of(context).pop(); // Close dialog
 
@@ -563,14 +553,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
                     ),
                   ),
                 );
-              } else if (value == 'rides') {
+                } else if (value == 'rides') {
                 if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'No access token available. Please login to view previous rides.',
-                      ),
-                    ),
+                  _errorService.showError(
+                    context,
+                    'No access token available. Please login to view previous rides.',
                   );
                   return;
                 }

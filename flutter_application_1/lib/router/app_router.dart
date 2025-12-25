@@ -132,4 +132,110 @@ class AppRouter {
       },
     );
   }
+
+  // ============================================================
+  // Navigation Helper Methods
+  // ============================================================
+
+  /// Push a new route onto the navigator
+  static Future<T?> push<T extends Object?>(
+    BuildContext context,
+    Widget page, {
+    RouteSettings? settings,
+  }) {
+    return Navigator.push<T>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => page,
+        settings: settings,
+      ),
+    );
+  }
+
+  /// Push a named route onto the navigator
+  static Future<T?> pushNamed<T extends Object?>(
+    BuildContext context,
+    String routeName, {
+    Object? arguments,
+  }) {
+    return Navigator.pushNamed<T>(
+      context,
+      routeName,
+      arguments: arguments,
+    );
+  }
+
+  /// Replace the current route with a new route
+  static Future<T?> pushReplacement<T extends Object?, TO extends Object?>(
+    BuildContext context,
+    Widget page, {
+    RouteSettings? settings,
+    TO? result,
+  }) {
+    return Navigator.pushReplacement<T, TO>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => page,
+        settings: settings,
+      ),
+      result: result,
+    );
+  }
+
+  /// Replace the current named route with a new named route
+  static Future<T?> pushReplacementNamed<T extends Object?, TO extends Object?>(
+    BuildContext context,
+    String routeName, {
+    Object? arguments,
+    TO? result,
+  }) {
+    return Navigator.pushReplacementNamed<T, TO>(
+      context,
+      routeName,
+      arguments: arguments,
+      result: result,
+    );
+  }
+
+  /// Push a route and remove all previous routes
+  static Future<T?> pushAndRemoveUntil<T extends Object?>(
+    BuildContext context,
+    Widget page,
+    bool Function(Route<dynamic>) predicate, {
+    RouteSettings? settings,
+  }) {
+    return Navigator.pushAndRemoveUntil<T>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => page,
+        settings: settings,
+      ),
+      predicate,
+    );
+  }
+
+  /// Push a named route and remove all previous routes
+  static Future<T?> pushNamedAndRemoveUntil<T extends Object?>(
+    BuildContext context,
+    String routeName,
+    bool Function(Route<dynamic>) predicate, {
+    Object? arguments,
+  }) {
+    return Navigator.pushNamedAndRemoveUntil<T>(
+      context,
+      routeName,
+      predicate,
+      arguments: arguments,
+    );
+  }
+
+  /// Pop the current route
+  static void pop<T extends Object?>(BuildContext context, [T? result]) {
+    Navigator.pop<T>(context, result);
+  }
+
+  /// Check if the navigator can pop
+  static bool canPop(BuildContext context) {
+    return Navigator.canPop(context);
+  }
 }

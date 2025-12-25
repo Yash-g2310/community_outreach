@@ -9,6 +9,8 @@ import 'dart:async';
 import 'driver_page.dart';
 import '../../config/constants.dart';
 import '../../services/websocket_service.dart';
+import '../../services/logger_service.dart';
+import '../../services/error_service.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -55,6 +57,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   Timer? _locationTimer;
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
+  final ErrorService _errorService = ErrorService();
 
   // API Configuration uses centralized base URL from constants
 
@@ -83,7 +86,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       _locationTimer?.cancel();
       _locationTimer = null;
     } catch (e) {
-      print('Error cancelling location timer: $e');
+      Logger.error('Error cancelling location timer', error: e, tag: 'DriverTracking');
     }
 
     _sendStopTracking();
@@ -93,7 +96,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      print('Error cancelling tracking subscription: $e');
+      Logger.error('Error cancelling tracking subscription', error: e, tag: 'DriverTracking');
     }
 
     super.dispose();
@@ -117,7 +120,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
     } catch (e) {
-      print('Error getting current location: $e');
+      Logger.error('Error getting current location', error: e, tag: 'DriverTracking');
     }
   }
 
@@ -136,9 +139,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         'type': 'start_tracking',
         'ride_id': widget.rideId,
       });
-      print("Driver Tracking Page: Sent start_tracking");
+      Logger.websocket("Driver Tracking Page: Sent start_tracking", tag: 'DriverTracking');
     } catch (e) {
-      print("Driver Tracking Page: Error sending start_tracking: $e");
+      Logger.error("Driver Tracking Page: Error sending start_tracking", error: e, tag: 'DriverTracking');
     }
   }
 
@@ -149,9 +152,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         'type': 'stop_tracking',
         'ride_id': widget.rideId,
       });
-      print('Sent stop_tracking for ride ${widget.rideId}');
+      Logger.websocket('Sent stop_tracking for ride ${widget.rideId}', tag: 'DriverTracking');
     } catch (e) {
-      print('Error sending stop_tracking: $e');
+      Logger.error('Error sending stop_tracking', error: e, tag: 'DriverTracking');
     }
   }
 
@@ -182,7 +185,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                 'ride_id': widget.rideId,
               });
             } catch (e) {
-              print('Error sending stop_tracking: $e');
+              Logger.error('Error sending stop_tracking', error: e, tag: 'DriverTracking');
             }
 
             if (!mounted) return;
@@ -234,7 +237,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           break;
       }
     } catch (e) {
-      print('Error decoding WS message: $e | raw=$data');
+      Logger.error('Error decoding WS message: $e | raw=$data', tag: 'DriverTracking');
     }
   }
 
@@ -261,12 +264,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           _rideStatus = 'completed';
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ride completed successfully! ✅'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _errorService.showSuccess(context, 'Ride completed successfully! ✅');
 
         // Navigate back to driver page after short delay
         Future.delayed(const Duration(seconds: 2), () async {
@@ -296,12 +294,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error completing ride: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _errorService.showError(context, 'Error completing ride: $e');
       }
     } finally {
       if (mounted) {
@@ -373,12 +366,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           _rideStatus = 'cancelled';
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ride cancelled successfully'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        _errorService.showSuccess(context, 'Ride cancelled successfully');
 
         // Navigate back to driver page after short delay
         Future.delayed(const Duration(seconds: 2), () async {
@@ -412,12 +400,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     } catch (e) {
       debugPrint('Error cancelling ride: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error cancelling ride: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _errorService.showError(context, 'Error cancelling ride: $e');
       }
     } finally {
       if (mounted) {

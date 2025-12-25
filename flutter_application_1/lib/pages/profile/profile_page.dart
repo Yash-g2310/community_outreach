@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../../models/profile_model.dart';
 import '../../services/profile_service.dart';
+import '../../services/error_service.dart';
 
 /// Clean ProfilePage implementation. Use this instead of the legacy/merged `profile.dart`.
 class ProfilePage extends StatefulWidget {
@@ -27,6 +28,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   final ProfileService _service = ProfileService();
   final ImagePicker _picker = ImagePicker();
+  final ErrorService _errorService = ErrorService();
 
   late final bool _isDriver;
   late Future<Profile> _profileFuture;
@@ -56,12 +58,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _uploadProfilePicture() async {
     if (widget.accessToken == null || widget.accessToken!.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please login to upload profile picture'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _errorService.showError(context, 'Please login to upload profile picture');
       }
       return;
     }
@@ -83,12 +80,7 @@ class _ProfilePageState extends State<ProfilePage> {
       await _service.uploadProfilePicture(widget.accessToken!, bytes, filename);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile picture updated successfully!'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _errorService.showSuccess(context, 'Profile picture updated successfully!');
       }
 
       setState(() {
@@ -98,12 +90,7 @@ class _ProfilePageState extends State<ProfilePage> {
     } catch (e) {
       setState(() => _isUploading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Upload error: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _errorService.showError(context, 'Upload error: ${e.toString()}');
       }
     }
   }

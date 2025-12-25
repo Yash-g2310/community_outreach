@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'user_page.dart';
 import '../../config/constants.dart';
+import '../../services/error_service.dart';
 
 class RideLoadingPage extends StatefulWidget {
   final String? jwtToken;
@@ -32,6 +33,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
   late final AnimationController _controller;
   late final Animation<double> _innerScale;
   late final Animation<double> _outerScale;
+  final ErrorService _errorService = ErrorService();
 
   @override
   void initState() {
@@ -218,30 +220,19 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                             if (resp.statusCode >= 200 &&
                                 resp.statusCode < 300) {
                               if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Ride cancelled'),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
+                              _errorService.showSuccess(context, 'Ride cancelled');
                             } else {
                               if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Failed to cancel ride (${resp.statusCode})',
-                                  ),
-                                  backgroundColor: Colors.orange,
-                                ),
+                              _errorService.showError(
+                                context,
+                                'Failed to cancel ride (${resp.statusCode})',
                               );
                             }
                           } catch (e) {
                             if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Network error while cancelling'),
-                                backgroundColor: Colors.red,
-                              ),
+                            _errorService.showError(
+                              context,
+                              'Network error while cancelling',
                             );
                           }
                         }
