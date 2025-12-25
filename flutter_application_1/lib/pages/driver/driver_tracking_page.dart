@@ -86,7 +86,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       _locationTimer?.cancel();
       _locationTimer = null;
     } catch (e) {
-      Logger.error('Error cancelling location timer', error: e, tag: 'DriverTracking');
+      Logger.error(
+        'Error cancelling location timer',
+        error: e,
+        tag: 'DriverTracking',
+      );
     }
 
     _sendStopTracking();
@@ -96,7 +100,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      Logger.error('Error cancelling tracking subscription', error: e, tag: 'DriverTracking');
+      Logger.error(
+        'Error cancelling tracking subscription',
+        error: e,
+        tag: 'DriverTracking',
+      );
     }
 
     super.dispose();
@@ -120,7 +128,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
     } catch (e) {
-      Logger.error('Error getting current location', error: e, tag: 'DriverTracking');
+      Logger.error(
+        'Error getting current location',
+        error: e,
+        tag: 'DriverTracking',
+      );
     }
   }
 
@@ -139,9 +151,16 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         'type': 'start_tracking',
         'ride_id': widget.rideId,
       });
-      Logger.websocket("Driver Tracking Page: Sent start_tracking", tag: 'DriverTracking');
+      Logger.websocket(
+        "Driver Tracking Page: Sent start_tracking",
+        tag: 'DriverTracking',
+      );
     } catch (e) {
-      Logger.error("Driver Tracking Page: Error sending start_tracking", error: e, tag: 'DriverTracking');
+      Logger.error(
+        "Driver Tracking Page: Error sending start_tracking",
+        error: e,
+        tag: 'DriverTracking',
+      );
     }
   }
 
@@ -152,9 +171,16 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         'type': 'stop_tracking',
         'ride_id': widget.rideId,
       });
-      Logger.websocket('Sent stop_tracking for ride ${widget.rideId}', tag: 'DriverTracking');
+      Logger.websocket(
+        'Sent stop_tracking for ride ${widget.rideId}',
+        tag: 'DriverTracking',
+      );
     } catch (e) {
-      Logger.error('Error sending stop_tracking', error: e, tag: 'DriverTracking');
+      Logger.error(
+        'Error sending stop_tracking',
+        error: e,
+        tag: 'DriverTracking',
+      );
     }
   }
 
@@ -185,7 +211,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                 'ride_id': widget.rideId,
               });
             } catch (e) {
-              Logger.error('Error sending stop_tracking', error: e, tag: 'DriverTracking');
+              Logger.error(
+                'Error sending stop_tracking',
+                error: e,
+                tag: 'DriverTracking',
+              );
             }
 
             if (!mounted) return;
@@ -237,7 +267,10 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           break;
       }
     } catch (e) {
-      Logger.error('Error decoding WS message: $e | raw=$data', tag: 'DriverTracking');
+      Logger.error(
+        'Error decoding WS message: $e | raw=$data',
+        tag: 'DriverTracking',
+      );
     }
   }
 

@@ -72,7 +72,11 @@ class _DriverPageState extends State<DriverPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      Logger.error('Error cancelling WebSocket subscription', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error cancelling WebSocket subscription',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
 
     // Ensure server marks driver offline when the app/widget is disposed
@@ -114,7 +118,10 @@ class _DriverPageState extends State<DriverPage> {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
-      Logger.debug('Initial Location: ${position.latitude}, ${position.longitude}', tag: 'DriverPage');
+      Logger.debug(
+        'Initial Location: ${position.latitude}, ${position.longitude}',
+        tag: 'DriverPage',
+      );
       // Location updates will be started after loading driver profile
     } catch (e) {
       Logger.error('Error initializing location', error: e, tag: 'DriverPage');
@@ -134,13 +141,20 @@ class _DriverPageState extends State<DriverPage> {
         _mapPosition = LatLng(position.latitude, position.longitude);
       });
 
-      Logger.debug('Current location: ${position.latitude}, ${position.longitude}', tag: 'DriverPage');
+      Logger.debug(
+        'Current location: ${position.latitude}, ${position.longitude}',
+        tag: 'DriverPage',
+      );
 
       if (widget.jwtToken != null) {
         _connectDriverSocket();
       }
     } catch (e) {
-      Logger.error('Error getting current location', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error getting current location',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
   }
 
@@ -178,14 +192,22 @@ class _DriverPageState extends State<DriverPage> {
       _locationUpdateTimer?.cancel();
       _locationUpdateTimer = null;
     } catch (e) {
-      Logger.error('Error cancelling location update timer', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error cancelling location update timer',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
 
     try {
       _positionStreamSubscription?.cancel();
       _positionStreamSubscription = null;
     } catch (e) {
-      Logger.error('Error cancelling position stream subscription', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error cancelling position stream subscription',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
 
     Logger.debug('Location update stream/timer stopped', tag: 'DriverPage');
@@ -216,7 +238,11 @@ class _DriverPageState extends State<DriverPage> {
 
       _logSocket('Driver WebSocket connected via service');
     } catch (e) {
-      Logger.error('Failed to connect driver WebSocket', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Failed to connect driver WebSocket',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
   }
 
@@ -291,7 +317,10 @@ class _DriverPageState extends State<DriverPage> {
           Logger.warning('Unhandled WS event: $data', tag: 'DriverPage');
       }
     } catch (e) {
-      Logger.error('Error decoding driver WS message: $e | raw=$data', tag: 'DriverPage');
+      Logger.error(
+        'Error decoding driver WS message: $e | raw=$data',
+        tag: 'DriverPage',
+      );
     }
   }
 
@@ -439,7 +468,11 @@ class _DriverPageState extends State<DriverPage> {
         });
       }
     } catch (e) {
-      Logger.error('Error sending driver location via WebSocket', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error sending driver location via WebSocket',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
   }
 
@@ -511,7 +544,10 @@ class _DriverPageState extends State<DriverPage> {
       final rejectedList = _rejectedRideIds.map((id) => id.toString()).toList();
 
       await prefs.setStringList('rejected_rides_$driverId', rejectedList);
-      Logger.debug('Saved ${_rejectedRideIds.length} rejected rides to local storage', tag: 'DriverPage');
+      Logger.debug(
+        'Saved ${_rejectedRideIds.length} rejected rides to local storage',
+        tag: 'DriverPage',
+      );
     } catch (e) {
       Logger.error('Error saving rejected rides', error: e, tag: 'DriverPage');
     }
@@ -732,7 +768,10 @@ class _DriverPageState extends State<DriverPage> {
           backgroundColor: Colors.orange,
         );
 
-        Logger.info('Ride $rideId rejected (server acknowledged) and hidden locally', tag: 'DriverPage');
+        Logger.info(
+          'Ride $rideId rejected (server acknowledged) and hidden locally',
+          tag: 'DriverPage',
+        );
       } else {
         throw Exception('Failed to reject ride: ${response.statusCode}');
       }
@@ -758,7 +797,11 @@ class _DriverPageState extends State<DriverPage> {
         body: json.encode({'status': 'offline'}),
       );
     } catch (e) {
-      Logger.error('Error sending offline status on dispose', error: e, tag: 'DriverPage');
+      Logger.error(
+        'Error sending offline status on dispose',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
   }
 

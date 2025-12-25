@@ -58,7 +58,10 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _uploadProfilePicture() async {
     if (widget.accessToken == null || widget.accessToken!.isEmpty) {
       if (mounted) {
-        _errorService.showError(context, 'Please login to upload profile picture');
+        _errorService.showError(
+          context,
+          'Please login to upload profile picture',
+        );
       }
       return;
     }
@@ -80,7 +83,10 @@ class _ProfilePageState extends State<ProfilePage> {
       await _service.uploadProfilePicture(widget.accessToken!, bytes, filename);
 
       if (mounted) {
-        _errorService.showSuccess(context, 'Profile picture updated successfully!');
+        _errorService.showSuccess(
+          context,
+          'Profile picture updated successfully!',
+        );
       }
 
       setState(() {

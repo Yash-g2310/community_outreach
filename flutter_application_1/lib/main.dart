@@ -43,7 +43,8 @@ class MyApp extends StatelessWidget {
       title: 'E-Rick Connect',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system, // Automatically switch based on system settings
+      themeMode:
+          ThemeMode.system, // Automatically switch based on system settings
     );
   }
 }

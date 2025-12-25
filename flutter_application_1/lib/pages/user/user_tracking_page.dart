@@ -78,7 +78,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      Logger.error('Error cancelling tracking subscription', error: e, tag: 'UserTracking');
+      Logger.error(
+        'Error cancelling tracking subscription',
+        error: e,
+        tag: 'UserTracking',
+      );
     }
     super.dispose();
   }
@@ -103,7 +107,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         _userPosition = LatLng(pos.latitude, pos.longitude);
       });
     } catch (e) {
-      Logger.error('Error getting user location', error: e, tag: 'UserTracking');
+      Logger.error(
+        'Error getting user location',
+        error: e,
+        tag: 'UserTracking',
+      );
     }
   }
 
@@ -142,7 +150,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             }
           });
 
-          Logger.debug('Ride ID: $_currentRideId, Driver: $_username', tag: 'UserTracking');
+          Logger.debug(
+            'Ride ID: $_currentRideId, Driver: $_username',
+            tag: 'UserTracking',
+          );
         }
       }
     } catch (e) {
@@ -157,7 +168,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'type': 'start_tracking',
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
-      Logger.websocket('Sent start_tracking for ride $_currentRideId', tag: 'UserTracking');
+      Logger.websocket(
+        'Sent start_tracking for ride $_currentRideId',
+        tag: 'UserTracking',
+      );
     }
   }
 
@@ -168,7 +182,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         'type': 'stop_tracking',
         'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
       });
-      Logger.websocket('Sent stop_tracking for ride $_currentRideId', tag: 'UserTracking');
+      Logger.websocket(
+        'Sent stop_tracking for ride $_currentRideId',
+        tag: 'UserTracking',
+      );
     }
   }
 
@@ -196,7 +213,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       }
       return null;
     } catch (e) {
-      Logger.error('Error getting current ride ID', error: e, tag: 'UserTracking');
+      Logger.error(
+        'Error getting current ride ID',
+        error: e,
+        tag: 'UserTracking',
+      );
       return null;
     }
   }
@@ -217,7 +238,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         _processedRideEvents.add(dedupeKey);
       }
 
-      Logger.websocket('Tracking WS message event: $eventType', tag: 'UserTracking');
+      Logger.websocket(
+        'Tracking WS message event: $eventType',
+        tag: 'UserTracking',
+      );
 
       switch (eventType) {
         case 'driver_track_location':
@@ -355,7 +379,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         // ignore other events
       }
     } catch (e) {
-      Logger.error('Error decoding tracking WS message: $e | raw=$data', tag: 'UserTracking');
+      Logger.error(
+        'Error decoding tracking WS message: $e | raw=$data',
+        tag: 'UserTracking',
+      );
     }
   }
 
@@ -382,8 +409,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         },
       );
 
-      Logger.network('Cancel response status: ${response.statusCode}', tag: 'UserTracking');
-      Logger.debug('Cancel response body: ${response.body}', tag: 'UserTracking');
+      Logger.network(
+        'Cancel response status: ${response.statusCode}',
+        tag: 'UserTracking',
+      );
+      Logger.debug(
+        'Cancel response body: ${response.body}',
+        tag: 'UserTracking',
+      );
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -393,7 +426,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         );
         return true;
       } else {
-        Logger.error('Failed to cancel ride: ${response.body}', tag: 'UserTracking');
+        Logger.error(
+          'Failed to cancel ride: ${response.body}',
+          tag: 'UserTracking',
+        );
         return false;
       }
     } catch (e) {
@@ -416,7 +452,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
-            Logger.debug('Navigating back from tracking to user page', tag: 'UserTracking');
+            Logger.debug(
+              'Navigating back from tracking to user page',
+              tag: 'UserTracking',
+            );
 
             // Cancel local subscription only - WebSocket service persists
             _wsSubscription?.cancel();

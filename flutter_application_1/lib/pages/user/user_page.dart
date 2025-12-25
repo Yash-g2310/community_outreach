@@ -77,7 +77,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
       _wsSubscription?.cancel();
       _wsSubscription = null;
     } catch (e) {
-      Logger.error('Error cancelling WebSocket subscription', error: e, tag: 'UserPage');
+      Logger.error(
+        'Error cancelling WebSocket subscription',
+        error: e,
+        tag: 'UserPage',
+      );
     }
 
     // Dispose controllers
@@ -111,7 +115,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
 
-      Logger.debug('Current location: ${position.latitude}, ${position.longitude}', tag: 'UserPage');
+      Logger.debug(
+        'Current location: ${position.latitude}, ${position.longitude}',
+        tag: 'UserPage',
+      );
 
       if (widget.jwtToken != null) {
         _connectPassengerSocket();
@@ -148,14 +155,27 @@ class _UserMapScreenState extends State<UserMapScreen> {
           "longitude": _currentPosition!.longitude,
           "radius": 1500,
         });
-        Logger.websocket("Sent Websocket for Nearby Drivers to backend", tag: 'UserPage');
+        Logger.websocket(
+          "Sent Websocket for Nearby Drivers to backend",
+          tag: 'UserPage',
+        );
       } else {
-        Logger.warning("Cannot subscribe_nearby — currentPosition is null", tag: 'UserPage');
+        Logger.warning(
+          "Cannot subscribe_nearby — currentPosition is null",
+          tag: 'UserPage',
+        );
       }
 
-      Logger.websocket('Passenger WebSocket connected via service (user_page)', tag: 'UserPage');
+      Logger.websocket(
+        'Passenger WebSocket connected via service (user_page)',
+        tag: 'UserPage',
+      );
     } catch (e) {
-      Logger.error('Failed to connect passenger WebSocket', error: e, tag: 'UserPage');
+      Logger.error(
+        'Failed to connect passenger WebSocket',
+        error: e,
+        tag: 'UserPage',
+      );
     }
   }
 
@@ -178,13 +198,19 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _processedRideEvents.add(dedupeKey);
       }
 
-      Logger.websocket('Passenger WS event on user_page: $eventType', tag: 'UserPage');
+      Logger.websocket(
+        'Passenger WS event on user_page: $eventType',
+        tag: 'UserPage',
+      );
 
       switch (eventType) {
         case 'ride_accepted':
           // Driver accepted the ride. Navigate to tracking page.
           // WebSocket service persists, so no transfer needed.
-          Logger.info('Driver accepted ride (user_page) — opening tracking page', tag: 'UserPage');
+          Logger.info(
+            'Driver accepted ride (user_page) — opening tracking page',
+            tag: 'UserPage',
+          );
 
           // If a loading screen is on top, pop it first so replacement
           // correctly shows the tracking page.
@@ -213,7 +239,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
             try {
               Navigator.pop(context);
             } catch (e) {
-              Logger.warning('Warning popping loading screen on ride_cancelled: $e', tag: 'UserPage');
+              Logger.warning(
+                'Warning popping loading screen on ride_cancelled: $e',
+                tag: 'UserPage',
+              );
             }
           }
           final String cancelMsg = data['message'] ?? 'Ride was cancelled.';
@@ -225,7 +254,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
             try {
               Navigator.pop(context);
             } catch (e) {
-              Logger.warning('Warning popping loading screen on ride_expired: $e', tag: 'UserPage');
+              Logger.warning(
+                'Warning popping loading screen on ride_expired: $e',
+                tag: 'UserPage',
+              );
             }
           }
           final String expiredMsg =
@@ -264,10 +296,17 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         default:
-          Logger.warning('Unhandled passenger WS event: $eventType', tag: 'UserPage');
+          Logger.warning(
+            'Unhandled passenger WS event: $eventType',
+            tag: 'UserPage',
+          );
       }
     } catch (e) {
-      Logger.error('Error parsing passenger WebSocket message', error: e, tag: 'UserPage');
+      Logger.error(
+        'Error parsing passenger WebSocket message',
+        error: e,
+        tag: 'UserPage',
+      );
     }
   }
 
@@ -395,7 +434,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
         body: json.encode(rideData),
       );
 
-      Logger.network('Response status: ${response.statusCode}', tag: 'UserPage');
+      Logger.network(
+        'Response status: ${response.statusCode}',
+        tag: 'UserPage',
+      );
       Logger.debug('Response body: ${response.body}', tag: 'UserPage');
 
       if (response.statusCode == 201) {
@@ -553,7 +595,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
                     ),
                   ),
                 );
-                } else if (value == 'rides') {
+              } else if (value == 'rides') {
                 if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
                   _errorService.showError(
                     context,

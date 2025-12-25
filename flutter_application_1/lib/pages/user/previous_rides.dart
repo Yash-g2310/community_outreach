@@ -55,14 +55,23 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
         });
       } else {
         final lastError = '${res.statusCode} ${res.body}';
-        Logger.error('PreviousRides: $endpoint -> $lastError', tag: 'PreviousRides');
+        Logger.error(
+          'PreviousRides: $endpoint -> $lastError',
+          tag: 'PreviousRides',
+        );
         setState(() => isLoading = false);
         if (mounted) {
-          _errorService.showError(context, 'Failed to load previous rides: $lastError');
+          _errorService.showError(
+            context,
+            'Failed to load previous rides: $lastError',
+          );
         }
       }
     } catch (e) {
-      Logger.error('PreviousRides: host $kBaseUrl exception: $e', tag: 'PreviousRides');
+      Logger.error(
+        'PreviousRides: host $kBaseUrl exception: $e',
+        tag: 'PreviousRides',
+      );
       setState(() => isLoading = false);
       if (mounted) {
         _errorService.showError(context, 'Failed to load previous rides: $e');

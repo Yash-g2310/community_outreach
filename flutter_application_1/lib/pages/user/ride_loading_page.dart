@@ -220,7 +220,10 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                             if (resp.statusCode >= 200 &&
                                 resp.statusCode < 300) {
                               if (!mounted) return;
-                              _errorService.showSuccess(context, 'Ride cancelled');
+                              _errorService.showSuccess(
+                                context,
+                                'Ride cancelled',
+                              );
                             } else {
                               if (!mounted) return;
                               _errorService.showError(
