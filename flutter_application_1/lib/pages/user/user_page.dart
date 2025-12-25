@@ -3,7 +3,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -17,6 +16,7 @@ import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/location_service.dart';
 import '../../router/app_router.dart';
 
 class UserMapScreen extends StatefulWidget {
@@ -93,30 +93,19 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
   Future<void> _loadCurrentLocation() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) throw Exception('Location services are disabled.');
+      final locationService = LocationService();
+      final location = await locationService.getCurrentLocation();
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          throw Exception('Location permission denied.');
-        }
+      if (location == null) {
+        throw Exception('Unable to get current location.');
       }
-      if (permission == LocationPermission.deniedForever) {
-        throw Exception('Location permissions are permanently denied.');
-      }
-
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
 
       _safeSetState(() {
-        _currentPosition = LatLng(position.latitude, position.longitude);
+        _currentPosition = location;
       });
 
       Logger.debug(
-        'Current location: ${position.latitude}, ${position.longitude}',
+        'Current location: ${location.latitude}, ${location.longitude}',
         tag: 'UserPage',
       );
 
@@ -124,7 +113,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         _connectPassengerSocket();
       }
     } catch (e) {
-      debugPrint('Error getting location: $e');
+      Logger.error('Error getting location', error: e, tag: 'UserPage');
     }
   }
 
@@ -214,30 +203,28 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
           // If a loading screen is on top, pop it first so replacement
           // correctly shows the tracking page.
-          if (Navigator.canPop(context)) {
-            Navigator.pop(context);
+          if (AppRouter.canPop(context)) {
+            AppRouter.pop(context);
           }
 
           // Navigate to tracking page - WebSocket service will handle messages
-          Navigator.pushReplacement(
+          AppRouter.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => UserTrackingPage(
-                jwtToken: widget.jwtToken,
-                sessionId: widget.sessionId,
-                csrfToken: widget.csrfToken,
-                refreshToken: widget.refreshToken,
-                userData: widget.userData,
-              ),
+            UserTrackingPage(
+              jwtToken: widget.jwtToken,
+              sessionId: widget.sessionId,
+              csrfToken: widget.csrfToken,
+              refreshToken: widget.refreshToken,
+              userData: widget.userData,
             ),
           );
           break;
 
         case 'ride_cancelled':
           // If a loading screen (RideLoadingPage) is on top, close it
-          if (Navigator.canPop(context)) {
+          if (AppRouter.canPop(context)) {
             try {
-              Navigator.pop(context);
+              AppRouter.pop(context);
             } catch (e) {
               Logger.warning(
                 'Warning popping loading screen on ride_cancelled: $e',
@@ -250,9 +237,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         case 'ride_expired':
-          if (Navigator.canPop(context)) {
+          if (AppRouter.canPop(context)) {
             try {
-              Navigator.pop(context);
+              AppRouter.pop(context);
             } catch (e) {
               Logger.warning(
                 'Warning popping loading screen on ride_expired: $e',
@@ -267,9 +254,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
           break;
 
         case 'no_drivers_available':
-          if (Navigator.canPop(context)) {
+          if (AppRouter.canPop(context)) {
             try {
-              Navigator.pop(context);
+              AppRouter.pop(context);
             } catch (e) {
               Logger.warning(
                 'Warning popping loading screen on no_drivers_available: $e',
@@ -379,33 +366,39 @@ class _UserMapScreenState extends State<UserMapScreen> {
   Future<void> _createRideRequest() async {
     // Validation
     if (widget.jwtToken == null) {
-      _showErrorSnackBar('Please login first');
+      _errorService.showError(context, 'Please login first');
       return;
     }
 
     if (_pickupController.text.trim().isEmpty) {
-      _showErrorSnackBar('Please enter pickup location');
+      _errorService.showError(context, 'Please enter pickup location');
       return;
     }
 
     if (_dropController.text.trim().isEmpty) {
-      _showErrorSnackBar('Please enter drop location');
+      _errorService.showError(context, 'Please enter drop location');
       return;
     }
 
     if (_passengerController.text.trim().isEmpty) {
-      _showErrorSnackBar('Please enter number of passengers');
+      _errorService.showError(context, 'Please enter number of passengers');
       return;
     }
 
     final int passengers = int.tryParse(_passengerController.text.trim()) ?? 0;
     if (passengers <= 0) {
-      _showErrorSnackBar('Please enter valid number of passengers');
+      _errorService.showError(
+        context,
+        'Please enter valid number of passengers',
+      );
       return;
     }
 
     if (_currentPosition == null) {
-      _showErrorSnackBar('Location not available. Please wait and try again.');
+      _errorService.showError(
+        context,
+        'Location not available. Please wait and try again.',
+      );
       return;
     }
 
@@ -442,7 +435,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       if (response.statusCode == 201) {
         final responseData = json.decode(response.body);
-        _showSuccessSnackBar('Ride request created! ID: ${responseData['id']}');
+        _errorService.showSuccess(
+          context,
+          'Ride request created! ID: ${responseData['id']}',
+        );
 
         // Clear form
         _pickupController.clear();
@@ -453,44 +449,43 @@ class _UserMapScreenState extends State<UserMapScreen> {
           // Show UI-only loading screen; keep this page's WebSocket
           // subscription active so it can detect server response events
           // (e.g. ride_accepted) and perform the transfer at that time.
-          Navigator.push(
+          AppRouter.push(
             context,
-            MaterialPageRoute(
-              builder: (_) => RideLoadingPage(
-                jwtToken: widget.jwtToken,
-                sessionId: widget.sessionId,
-                csrfToken: widget.csrfToken,
-                refreshToken: widget.refreshToken,
-                userData: widget.userData,
-                rideId: responseData['id'],
-              ),
+            RideLoadingPage(
+              jwtToken: widget.jwtToken,
+              sessionId: widget.sessionId,
+              csrfToken: widget.csrfToken,
+              refreshToken: widget.refreshToken,
+              userData: widget.userData,
+              rideId: responseData['id'],
             ),
           );
         }
       } else if (response.statusCode == 400) {
         final errorData = json.decode(response.body);
-        _showErrorSnackBar('Error: ${errorData['error'] ?? 'Bad request'}');
+        _errorService.showError(
+          context,
+          'Error: ${errorData['error'] ?? 'Bad request'}',
+        );
       } else if (response.statusCode == 403) {
-        _showErrorSnackBar('Permission denied. Please login again.');
+        _errorService.showError(
+          context,
+          'Permission denied. Please login again.',
+        );
       } else {
-        _showErrorSnackBar('Unexpected error. Please try again.');
+        _errorService.showError(context, 'Unexpected error. Please try again.');
       }
     } catch (e) {
       Logger.error('Network error', error: e, tag: 'UserPage');
-      _showErrorSnackBar('Network error. Please check your connection.');
+      _errorService.showError(
+        context,
+        'Network error. Please check your connection.',
+      );
     } finally {
       _safeSetState(() {
         _isLoading = false;
       });
     }
-  }
-
-  void _showErrorSnackBar(String message) {
-    _errorService.showError(context, message);
-  }
-
-  void _showSuccessSnackBar(String message) {
-    _errorService.showSuccess(context, message);
   }
 
   // Show an AlertDialog for important passenger events (cancel/expired/no drivers)
@@ -582,17 +577,15 @@ class _UserMapScreenState extends State<UserMapScreen> {
             ),
             onSelected: (value) {
               if (value == 'profile') {
-                Navigator.push(
+                AppRouter.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => ProfilePage(
-                      userType:
-                          widget.userData?['role']?.toString().capitalize() ??
-                          'User',
-                      userName: widget.userData?['username'] ?? 'E-Rick User',
-                      userEmail: widget.userData?['email'] ?? 'user@erick.com',
-                      accessToken: widget.jwtToken,
-                    ),
+                  ProfilePage(
+                    userType:
+                        widget.userData?['role']?.toString().capitalize() ??
+                        'User',
+                    userName: widget.userData?['username'] ?? 'E-Rick User',
+                    userEmail: widget.userData?['email'] ?? 'user@erick.com',
+                    accessToken: widget.jwtToken,
                   ),
                 );
               } else if (value == 'rides') {
@@ -603,13 +596,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
                   );
                   return;
                 }
-                Navigator.push(
+                AppRouter.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => PreviousRidesPage(
-                      jwtToken: widget.jwtToken!,
-                      isDriver: false,
-                    ),
+                  PreviousRidesPage(
+                    jwtToken: widget.jwtToken!,
+                    isDriver: false,
                   ),
                 );
               }

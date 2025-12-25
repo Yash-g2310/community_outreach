@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'user_page.dart';
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import '../../services/error_service.dart';
 
 class RideLoadingPage extends StatefulWidget {
@@ -205,7 +205,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                         // Try to cancel the ride on the backend if we have a rideId
                         if (widget.rideId != null && widget.jwtToken != null) {
                           final uri = Uri.parse(
-                            '$kBaseUrl/api/rides/passenger/${widget.rideId}/cancel/',
+                            PassengerEndpoints.cancel(widget.rideId!),
                           );
                           try {
                             final resp = await http.post(

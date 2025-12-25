@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
@@ -113,7 +113,7 @@ class _SignupPageState extends State<SignupPage> {
       'Profile Image: ${_profileImageBytes != null ? 'Selected' : 'None'}',
       tag: 'Signup',
     );
-    Logger.debug('API Endpoint: $kBaseUrl/api/auth/register/', tag: 'Signup');
+    Logger.debug('API Endpoint: ${AuthEndpoints.register}', tag: 'Signup');
 
     try {
       // Prepare request data
@@ -131,7 +131,7 @@ class _SignupPageState extends State<SignupPage> {
       }
 
       final response = await http.post(
-        Uri.parse('$kBaseUrl/api/auth/register/'),
+        Uri.parse(AuthEndpoints.register),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestData),
       );
@@ -221,7 +221,7 @@ class _SignupPageState extends State<SignupPage> {
     try {
       var request = http.MultipartRequest(
         'PATCH',
-        Uri.parse('$kBaseUrl/api/rides/user/profile/'),
+        Uri.parse(UserProfileEndpoints.profile),
       );
 
       request.headers['Authorization'] = 'Bearer $accessToken';

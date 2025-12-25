@@ -5,13 +5,14 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'user_page.dart'; // for navigation back to user page
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/location_service.dart';
+import '../../router/app_router.dart';
 
 class UserTrackingPage extends StatefulWidget {
   final String? jwtToken;
@@ -41,7 +42,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   String _username = "-";
   String _phoneNumber = "-";
   String _vehicleNumber = "-";
-  String? _currentRideId;
+  int? _currentRideId;
 
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
@@ -97,14 +98,13 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
 
   Future<void> _getCurrentLocation() async {
     try {
-      Position pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      final locationService = LocationService();
+      final location = await locationService.getCurrentLocation();
 
-      if (!mounted) return;
+      if (location == null || !mounted) return;
 
       _safeSetState(() {
-        _userPosition = LatLng(pos.latitude, pos.longitude);
+        _userPosition = location;
       });
     } catch (e) {
       Logger.error(
@@ -121,7 +121,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   Future<void> _getCurrentRideInfo() async {
     try {
       final response = await http.get(
-        Uri.parse('$kBaseUrl/api/rides/passenger/current/'),
+        Uri.parse(PassengerEndpoints.current),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.jwtToken}',
@@ -137,7 +137,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           final driver = ride['driver'];
 
           _safeSetState(() {
-            _currentRideId = ride['id']?.toString();
+            final id = ride['id'];
+            _currentRideId = id is int
+                ? id
+                : (id != null ? int.tryParse(id.toString()) : null);
             _status = ride['status'] ?? "N/A";
             _username = driver['username'] ?? "N/A";
             _phoneNumber = driver['phone_number'] ?? "N/A";
@@ -166,7 +169,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     if (_currentRideId != null) {
       _wsService.sendPassengerMessage({
         'type': 'start_tracking',
-        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
+        'ride_id': _currentRideId,
       });
       Logger.websocket(
         'Sent start_tracking for ride $_currentRideId',
@@ -180,7 +183,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     if (_currentRideId != null) {
       _wsService.sendPassengerMessage({
         'type': 'stop_tracking',
-        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
+        'ride_id': _currentRideId,
       });
       Logger.websocket(
         'Sent stop_tracking for ride $_currentRideId',
@@ -192,10 +195,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   // ============================================================
   // Get current ride ID for cancellation
   // ============================================================
-  Future<String?> _getCurrentRideId() async {
+  Future<int?> _getCurrentRideId() async {
     try {
       final response = await http.get(
-        Uri.parse('$kBaseUrl/api/rides/passenger/current'),
+        Uri.parse(PassengerEndpoints.current),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -208,7 +211,10 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
 
         if (hasActiveRide) {
           final rideData = data['ride'] ?? {};
-          return rideData['id']?.toString();
+          final id = rideData['id'];
+          if (id is int) return id;
+          if (id != null) return int.tryParse(id.toString());
+          return null;
         }
       }
       return null;
@@ -302,16 +308,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                     }
                     if (!mounted) return;
                     // Navigate back to main UserMapScreen
-                    Navigator.pushReplacement(
+                    AppRouter.pushReplacement(
                       context,
-                      MaterialPageRoute(
-                        builder: (context) => UserMapScreen(
-                          jwtToken: widget.jwtToken,
-                          sessionId: widget.sessionId,
-                          csrfToken: widget.csrfToken,
-                          refreshToken: widget.refreshToken,
-                          userData: widget.userData,
-                        ),
+                      UserMapScreen(
+                        jwtToken: widget.jwtToken,
+                        sessionId: widget.sessionId,
+                        csrfToken: widget.csrfToken,
+                        refreshToken: widget.refreshToken,
+                        userData: widget.userData,
                       ),
                     );
                   },
@@ -362,16 +366,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             }
             if (!mounted) return;
             // Navigate back to main UserMapScreen so user lands on the map
-            Navigator.pushReplacement(
+            AppRouter.pushReplacement(
               context,
-              MaterialPageRoute(
-                builder: (context) => UserMapScreen(
-                  jwtToken: widget.jwtToken,
-                  sessionId: widget.sessionId,
-                  csrfToken: widget.csrfToken,
-                  refreshToken: widget.refreshToken,
-                  userData: widget.userData,
-                ),
+              UserMapScreen(
+                jwtToken: widget.jwtToken,
+                sessionId: widget.sessionId,
+                csrfToken: widget.csrfToken,
+                refreshToken: widget.refreshToken,
+                userData: widget.userData,
               ),
             );
           });
@@ -402,7 +404,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
       Logger.info('Attempting to cancel ride $rideId...', tag: 'UserTracking');
 
       final response = await http.post(
-        Uri.parse('$kBaseUrl/api/rides/passenger/$rideId/cancel/'),
+        Uri.parse(PassengerEndpoints.cancel(rideId)),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -461,16 +463,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             _wsSubscription?.cancel();
 
             // Navigate back to UserMapScreen with proper parameters
-            Navigator.pushReplacement(
+            AppRouter.pushReplacement(
               context,
-              MaterialPageRoute(
-                builder: (context) => UserMapScreen(
-                  jwtToken: widget.jwtToken,
-                  sessionId: widget.sessionId,
-                  csrfToken: widget.csrfToken,
-                  refreshToken: widget.refreshToken,
-                  userData: widget.userData,
-                ),
+              UserMapScreen(
+                jwtToken: widget.jwtToken,
+                sessionId: widget.sessionId,
+                csrfToken: widget.csrfToken,
+                refreshToken: widget.refreshToken,
+                userData: widget.userData,
               ),
             );
           },
@@ -585,12 +585,12 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                         actions: [
                                           TextButton(
                                             onPressed: () =>
-                                                Navigator.pop(context, false),
+                                                AppRouter.pop(context, false),
                                             child: const Text('No, Keep Ride'),
                                           ),
                                           TextButton(
                                             onPressed: () =>
-                                                Navigator.pop(context, true),
+                                                AppRouter.pop(context, true),
                                             child: const Text(
                                               'Yes, Cancel',
                                               style: TextStyle(
@@ -630,7 +630,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                   if (!context.mounted) return;
 
                                   // Close loading dialog
-                                  Navigator.pop(context);
+                                  AppRouter.pop(context);
 
                                   if (success) {
                                     _errorService.showSuccess(
@@ -641,16 +641,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                     // Cancel local listener and navigate back to UserMapScreen
                                     _wsSubscription?.cancel();
 
-                                    Navigator.pushReplacement(
+                                    AppRouter.pushReplacement(
                                       context,
-                                      MaterialPageRoute(
-                                        builder: (context) => UserMapScreen(
-                                          jwtToken: widget.jwtToken,
-                                          sessionId: widget.sessionId,
-                                          csrfToken: widget.csrfToken,
-                                          refreshToken: widget.refreshToken,
-                                          userData: widget.userData,
-                                        ),
+                                      UserMapScreen(
+                                        jwtToken: widget.jwtToken,
+                                        sessionId: widget.sessionId,
+                                        csrfToken: widget.csrfToken,
+                                        refreshToken: widget.refreshToken,
+                                        userData: widget.userData,
                                       ),
                                     );
                                   } else {

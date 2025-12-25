@@ -3,14 +3,15 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'driver_page.dart';
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/location_service.dart';
+import '../../router/app_router.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -118,14 +119,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
   Future<void> _getCurrentLocation() async {
     try {
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      final locationService = LocationService();
+      final location = await locationService.getCurrentLocation();
 
-      if (!mounted) return;
+      if (location == null || !mounted) return;
 
       _safeSetState(() {
-        _currentPosition = LatLng(position.latitude, position.longitude);
+        _currentPosition = location;
       });
     } catch (e) {
       Logger.error(
@@ -220,11 +220,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
             if (!mounted) return;
 
-            Navigator.pushReplacement(
+            AppRouter.pushReplacement(
               context,
-              MaterialPageRoute(
-                builder: (context) => DriverPage(jwtToken: widget.accessToken),
-              ),
+              DriverPage(jwtToken: widget.accessToken),
             );
           });
           break;
@@ -283,7 +281,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$kBaseUrl/api/rides/handle/${widget.rideId}/complete/'),
+        Uri.parse(RideHandlingEndpoints.complete(widget.rideId)),
         headers: {
           'Authorization': 'Bearer ${widget.accessToken}',
           'Content-Type': 'application/json',
@@ -349,11 +347,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         content: const Text('Are you sure you want to cancel this ride?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => AppRouter.pop(context, false),
             child: const Text('No'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => AppRouter.pop(context, true),
             child: const Text('Yes', style: TextStyle(color: Colors.red)),
           ),
         ],
@@ -364,7 +362,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
     // If the user chooses "No", stay on the same page
     if (shouldCancel != true) {
-      debugPrint('Ride cancellation aborted by user.');
+      Logger.debug('Ride cancellation aborted by user.', tag: 'DriverTracking');
       return;
     }
 
@@ -374,26 +372,33 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
     try {
       // Correct endpoint (adjusted to match your Django URLs)
-      final endpoint = '/api/rides/handle/${widget.rideId}/driver-cancel/';
-
-      debugPrint('Sending cancel request to: $kBaseUrl$endpoint');
+      Logger.debug(
+        'Sending cancel request to: ${RideHandlingEndpoints.driverCancel(widget.rideId)}',
+        tag: 'DriverTracking',
+      );
 
       final response = await http.post(
-        Uri.parse('$kBaseUrl$endpoint'),
+        Uri.parse(RideHandlingEndpoints.driverCancel(widget.rideId)),
         headers: {
           'Authorization': 'Bearer ${widget.accessToken}',
           'Content-Type': 'application/json',
         },
       );
 
-      // 🧾 Print the raw response for debugging
-      debugPrint('Cancel Ride Response Code: ${response.statusCode}');
-      debugPrint('Cancel Ride Response Body: ${response.body}');
+      // 🧾 Log the raw response for debugging
+      Logger.network(
+        'Cancel Ride Response Code: ${response.statusCode}',
+        tag: 'DriverTracking',
+      );
+      Logger.debug(
+        'Cancel Ride Response Body: ${response.body}',
+        tag: 'DriverTracking',
+      );
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        debugPrint('Ride cancelled successfully.');
+        Logger.info('Ride cancelled successfully.', tag: 'DriverTracking');
 
         _safeSetState(() {
           _rideStatus = 'cancelled';
@@ -431,7 +436,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
         );
       }
     } catch (e) {
-      debugPrint('Error cancelling ride: $e');
+      Logger.error('Error cancelling ride', error: e, tag: 'DriverTracking');
       if (mounted) {
         _errorService.showError(context, 'Error cancelling ride: $e');
       }

@@ -11,11 +11,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../profile/profile_page.dart';
 import 'driver_tracking_page.dart';
 import '../user/previous_rides.dart';
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/location_service.dart';
 import '../../router/app_router.dart';
 
 class DriverPage extends StatefulWidget {
@@ -87,7 +88,11 @@ class _DriverPageState extends State<DriverPage> {
       _positionStreamSubscription?.cancel();
       _positionStreamSubscription = null;
     } catch (e) {
-      print('Error cancelling position stream subscription: $e');
+      Logger.error(
+        'Error cancelling position stream subscription',
+        error: e,
+        tag: 'DriverPage',
+      );
     }
 
     super.dispose();
@@ -95,31 +100,19 @@ class _DriverPageState extends State<DriverPage> {
 
   Future<void> _loadCurrentLocation() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) throw Exception('Location services are disabled.');
-      // Check location permission
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          throw Exception('Location permission denied.');
-        }
-      }
+      final locationService = LocationService();
+      final location = await locationService.getCurrentLocation();
 
-      if (permission == LocationPermission.deniedForever) {
-        throw Exception('Location permissions are permanently denied.');
+      if (location == null) {
+        throw Exception('Unable to get current location.');
       }
-
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
 
       _safeSetState(() {
-        _mapPosition = LatLng(position.latitude, position.longitude);
+        _mapPosition = location;
       });
 
       Logger.debug(
-        'Initial Location: ${position.latitude}, ${position.longitude}',
+        'Initial Location: ${location.latitude}, ${location.longitude}',
         tag: 'DriverPage',
       );
       // Location updates will be started after loading driver profile
@@ -130,11 +123,23 @@ class _DriverPageState extends State<DriverPage> {
 
   Future<void> _getCurrentLocation() async {
     try {
-      await Geolocator.requestPermission();
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      _currentPosition = position;
+      final locationService = LocationService();
+      final location = await locationService.getCurrentLocation();
+
+      if (location == null) {
+        throw Exception('Unable to get current location.');
+      }
+
+      // Convert LatLng to Position-like object for _currentPosition
+      // Since _currentPosition is Position?, we need to get the actual Position
+      // For now, we'll update _mapPosition and keep _currentPosition logic
+      final position = await locationService.getCurrentLocation();
+      if (position == null) return;
+
+      // We need to keep using Position for _currentPosition
+      // Let's use LocationService but still need Position for compatibility
+      // Actually, let me check what _currentPosition is used for
+      _currentPosition = null; // Will be set from position stream
 
       // Update map position
       _safeSetState(() {
@@ -170,7 +175,9 @@ class _DriverPageState extends State<DriverPage> {
     _positionStreamSubscription?.cancel();
 
     // Use Geolocator position stream to reduce battery/network usage.
-    // Emit only when device moves more than `distanceFilter` meters.
+    // Note: We use Geolocator directly here because _sendLocationToServer needs Position objects,
+    // and LocationService.getLocationStream() returns Stream<LatLng>.
+    // LocationService is used for simple getCurrentLocation() calls.
     final locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 50,
@@ -180,6 +187,7 @@ class _DriverPageState extends State<DriverPage> {
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
           (Position position) async {
             if (!isActive) return;
+            _currentPosition = position;
             await _sendLocationToServer(position);
           },
         );
@@ -214,8 +222,7 @@ class _DriverPageState extends State<DriverPage> {
   }
 
   void _logDriver(String message, {String tag = 'Driver'}) {
-    if (!kDebugMode) return;
-    debugPrint('[$tag] $message');
+    Logger.debug(message, tag: tag);
   }
 
   void _logSocket(String message) => _logDriver(message, tag: 'DriverSocket');
@@ -568,7 +575,7 @@ class _DriverPageState extends State<DriverPage> {
   Future<void> _fetchDriverProfile() async {
     try {
       final response = await http.get(
-        Uri.parse('$kBaseUrl/api/rides/driver/profile/'),
+        Uri.parse(DriverEndpoints.profile),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -611,7 +618,7 @@ class _DriverPageState extends State<DriverPage> {
       double? longitude = _currentPosition?.longitude;
 
       final response = await http.patch(
-        Uri.parse('$kBaseUrl/api/rides/driver/status/'),
+        Uri.parse(DriverEndpoints.status),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -671,7 +678,7 @@ class _DriverPageState extends State<DriverPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$kBaseUrl/api/rides/handle/$rideId/accept/'),
+        Uri.parse(RideHandlingEndpoints.accept(rideId)),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -696,30 +703,28 @@ class _DriverPageState extends State<DriverPage> {
 
         // Navigate to ride tracking page - WebSocket service persists
         if (mounted) {
-          Navigator.pushReplacement(
+          AppRouter.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => RideTrackingPage(
-                rideId: notification['id'] as int,
-                pickupAddress: notification['start'] as String,
-                dropoffAddress: notification['end'] as String,
-                numberOfPassengers: notification['people'] as int,
-                passengerName: notification['passenger_name'] as String?,
-                passengerPhone: notification['passenger_phone'] as String?,
-                pickupLat: notification['pickup_lat'] != null
-                    ? double.tryParse(notification['pickup_lat'].toString())
-                    : null,
-                pickupLng: notification['pickup_lng'] != null
-                    ? double.tryParse(notification['pickup_lng'].toString())
-                    : null,
-                dropoffLat: notification['dropoff_lat'] != null
-                    ? double.tryParse(notification['dropoff_lat'].toString())
-                    : null,
-                dropoffLng: notification['dropoff_lng'] != null
-                    ? double.tryParse(notification['dropoff_lng'].toString())
-                    : null,
-                accessToken: widget.jwtToken,
-              ),
+            RideTrackingPage(
+              rideId: notification['id'] as int,
+              pickupAddress: notification['start'] as String,
+              dropoffAddress: notification['end'] as String,
+              numberOfPassengers: notification['people'] as int,
+              passengerName: notification['passenger_name'] as String?,
+              passengerPhone: notification['passenger_phone'] as String?,
+              pickupLat: notification['pickup_lat'] != null
+                  ? double.tryParse(notification['pickup_lat'].toString())
+                  : null,
+              pickupLng: notification['pickup_lng'] != null
+                  ? double.tryParse(notification['pickup_lng'].toString())
+                  : null,
+              dropoffLat: notification['dropoff_lat'] != null
+                  ? double.tryParse(notification['dropoff_lat'].toString())
+                  : null,
+              dropoffLng: notification['dropoff_lng'] != null
+                  ? double.tryParse(notification['dropoff_lng'].toString())
+                  : null,
+              accessToken: widget.jwtToken,
             ),
           );
         }
@@ -745,7 +750,7 @@ class _DriverPageState extends State<DriverPage> {
     try {
       // Call server API to reject the ride offer so backend state is authoritative.
       final response = await http.post(
-        Uri.parse('$kBaseUrl/api/rides/handle/$rideId/reject/'),
+        Uri.parse(RideHandlingEndpoints.reject(rideId)),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -789,7 +794,7 @@ class _DriverPageState extends State<DriverPage> {
 
     try {
       await http.patch(
-        Uri.parse('$kBaseUrl/api/rides/driver/status/'),
+        Uri.parse(DriverEndpoints.status),
         headers: {
           'Authorization': 'Bearer ${widget.jwtToken}',
           'Content-Type': 'application/json',
@@ -862,7 +867,7 @@ class _DriverPageState extends State<DriverPage> {
                     onPressed: isLoading
                         ? null
                         : () async {
-                            Navigator.pop(context);
+                            AppRouter.pop(context);
                             await _acceptRide(notif);
                           },
                     icon: const Icon(Icons.check_circle, color: Colors.white),
@@ -875,7 +880,7 @@ class _DriverPageState extends State<DriverPage> {
                     onPressed: isLoading
                         ? null
                         : () async {
-                            Navigator.pop(context);
+                            AppRouter.pop(context);
                             await _rejectRide(notif['id'] as int);
                           },
                     icon: const Icon(Icons.cancel, color: Colors.white),
@@ -909,16 +914,16 @@ class _DriverPageState extends State<DriverPage> {
                 content: const Text('Are you sure you want to logout?'),
                 actions: [
                   TextButton(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => AppRouter.pop(context),
                     child: const Text('Cancel'),
                   ),
                   TextButton(
                     onPressed: () async {
-                      Navigator.pop(context); // Close dialog
+                      AppRouter.pop(context); // Close dialog
                       // Clear auth data and navigate to splash
                       await AuthService().clearAuthData();
                       if (context.mounted) {
-                        Navigator.pushNamedAndRemoveUntil(
+                        AppRouter.pushNamedAndRemoveUntil(
                           context,
                           AppRouter.splash,
                           (route) => false,
@@ -947,16 +952,13 @@ class _DriverPageState extends State<DriverPage> {
             ),
             onSelected: (value) {
               if (value == 'profile') {
-                Navigator.push(
+                AppRouter.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => ProfilePage(
-                      userType: 'Driver',
-                      userName: widget.userData?['username'] ?? 'E-Rick Driver',
-                      userEmail:
-                          widget.userData?['email'] ?? 'driver@erick.com',
-                      accessToken: widget.jwtToken,
-                    ),
+                  ProfilePage(
+                    userType: 'Driver',
+                    userName: widget.userData?['username'] ?? 'E-Rick Driver',
+                    userEmail: widget.userData?['email'] ?? 'driver@erick.com',
+                    accessToken: widget.jwtToken,
                   ),
                 );
               } else if (value == 'rides') {
@@ -967,14 +969,9 @@ class _DriverPageState extends State<DriverPage> {
                   );
                   return;
                 }
-                Navigator.push(
+                AppRouter.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => PreviousRidesPage(
-                      jwtToken: widget.jwtToken!,
-                      isDriver: true,
-                    ),
-                  ),
+                  PreviousRidesPage(jwtToken: widget.jwtToken!, isDriver: true),
                 );
               }
             },

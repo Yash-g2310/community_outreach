@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import '../config/constants.dart';
+import '../config/api_endpoints.dart';
 import '../models/profile_model.dart';
 
 class ProfileService {
@@ -11,8 +11,8 @@ class ProfileService {
 
   Future<Profile> fetchProfile(String token, {required bool isDriver}) async {
     final endpoint = isDriver
-        ? '$kBaseUrl/api/rides/driver/profile/'
-        : '$kBaseUrl/api/rides/user/profile/';
+        ? DriverEndpoints.profile
+        : UserProfileEndpoints.profile;
 
     final res = await client.get(
       Uri.parse(endpoint),
@@ -35,7 +35,7 @@ class ProfileService {
     Uint8List bytes,
     String filename,
   ) async {
-    final endpoint = '$kBaseUrl/api/rides/user/profile/';
+    final endpoint = UserProfileEndpoints.profile;
     final req = http.MultipartRequest('PATCH', Uri.parse(endpoint));
     req.headers['Authorization'] = 'Bearer $token';
     req.files.add(

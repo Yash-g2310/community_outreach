@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import '../../config/constants.dart';
+import '../../config/api_endpoints.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 
@@ -34,8 +34,8 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
 
   Future<void> _fetchPreviousRides() async {
     final endpoint = widget.isDriver
-        ? '$kBaseUrl/api/rides/driver/history'
-        : '$kBaseUrl/api/rides/passenger/history';
+        ? DriverEndpoints.history
+        : PassengerEndpoints.history;
 
     try {
       final res = await http.get(
@@ -69,7 +69,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
       }
     } catch (e) {
       Logger.error(
-        'PreviousRides: host $kBaseUrl exception: $e',
+        'PreviousRides: exception: $e',
         tag: 'PreviousRides',
       );
       setState(() => isLoading = false);
