@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 
-import 'models/profile_model.dart';
-import 'services/profile_service.dart';
+import '../../models/profile_model.dart';
+import '../../services/profile_service.dart';
 
 /// Clean ProfilePage implementation. Use this instead of the legacy/merged `profile.dart`.
 class ProfilePage extends StatefulWidget {

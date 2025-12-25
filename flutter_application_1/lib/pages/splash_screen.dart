@@ -1,10 +1,5 @@
 import 'package:flutter/material.dart';
-import 'login_page.dart';
-import 'signup_page.dart';
-
-void main() {
-  runApp(const StartPageApp());
-}
+import '../router/app_router.dart';
 
 class StartPageApp extends StatelessWidget {
   const StartPageApp({super.key});
@@ -88,12 +83,7 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: ElevatedButton(
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const LoginScreen(),
-                            ),
-                          );
+                          Navigator.pushNamed(context, AppRouter.login);
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFF7A00),
@@ -119,12 +109,7 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: OutlinedButton(
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const SignupPage(),
-                            ),
-                          );
+                          Navigator.pushNamed(context, AppRouter.signup);
                         },
                         style: OutlinedButton.styleFrom(
                           side: const BorderSide(

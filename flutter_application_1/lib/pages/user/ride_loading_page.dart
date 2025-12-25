@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'user_page.dart';
-import 'constants.dart';
+import '../../config/constants.dart';
 
-class RideLoadingScreen extends StatefulWidget {
+class RideLoadingPage extends StatefulWidget {
   final String? jwtToken;
   final String? sessionId;
   final String? csrfToken;
@@ -13,7 +13,7 @@ class RideLoadingScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
   final int? rideId;
 
-  const RideLoadingScreen({
+  const RideLoadingPage({
     super.key,
     this.jwtToken,
     this.sessionId,
@@ -24,10 +24,10 @@ class RideLoadingScreen extends StatefulWidget {
   });
 
   @override
-  State<RideLoadingScreen> createState() => _RideLoadingScreenState();
+  State<RideLoadingPage> createState() => _RideLoadingPageState();
 }
 
-class _RideLoadingScreenState extends State<RideLoadingScreen>
+class _RideLoadingPageState extends State<RideLoadingPage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _innerScale;
@@ -217,44 +217,41 @@ class _RideLoadingScreenState extends State<RideLoadingScreen>
 
                             if (resp.statusCode >= 200 &&
                                 resp.statusCode < 300) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Ride cancelled'),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              }
-                            } else {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Failed to cancel ride (${resp.statusCode})',
-                                    ),
-                                    backgroundColor: Colors.orange,
-                                  ),
-                                );
-                              }
-                            }
-                          } catch (e) {
-                            if (mounted) {
+                              if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
+                                  content: Text('Ride cancelled'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            } else {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
                                   content: Text(
-                                    'Network error while cancelling',
+                                    'Failed to cancel ride (${resp.statusCode})',
                                   ),
-                                  backgroundColor: Colors.red,
+                                  backgroundColor: Colors.orange,
                                 ),
                               );
                             }
+                          } catch (e) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Network error while cancelling'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
                           }
                         }
-
                         // Navigate back to user map regardless
-                        Navigator.of(context).pushReplacement(
+                        if (!mounted) return;
+
+                        Navigator.pushReplacement(
+                          context,
                           MaterialPageRoute(
-                            builder: (_) => UserMapScreen(
+                            builder: (context) => UserMapScreen(
                               jwtToken: widget.jwtToken,
                               sessionId: widget.sessionId,
                               csrfToken: widget.csrfToken,

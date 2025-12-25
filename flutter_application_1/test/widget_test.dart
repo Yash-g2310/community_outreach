@@ -6,16 +6,20 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_application_1/erick_driver_page.dart';
+import 'package:flutter_application_1/main.dart';
 
 void main() {
-  testWidgets('ERick Driver App smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const ERickDriverApp());
+  testWidgets('App smoke test', (WidgetTester tester) async {
+    // Build the main app widget (MyApp)
+    await tester.pumpWidget(const MyApp(initialRoute: '/'));
 
-    // Verify that the app loads correctly
-    expect(find.text('E Rick Driver'), findsOneWidget);
-    expect(find.text('Active'), findsOneWidget);
-    expect(find.text('Inactive'), findsOneWidget);
+    // Pump once to build the widget tree
+    await tester.pump();
+
+    // Verify that the splash screen loads correctly
+    // The splash screen should show "Earn rewards for every ride you take."
+    expect(find.text('Earn rewards for every ride you take.'), findsOneWidget);
+    expect(find.text('Log In'), findsOneWidget);
+    expect(find.text('Sign Up'), findsOneWidget);
   });
 }

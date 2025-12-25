@@ -8,33 +8,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web_socket_channel/status.dart' as ws_status;
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'profile_page.dart';
-import 'erick_tracking_page.dart';
-import 'previous_rides.dart';
-import 'utils/socket_channel_factory.dart';
-import 'constants.dart';
-import 'ws_utils.dart';
-
-void main() {
-  runApp(const ERickDriverApp());
-}
-
-class ERickDriverApp extends StatelessWidget {
-  final String? jwtToken;
-  final Map<String, dynamic>? userData;
-
-  const ERickDriverApp({super.key, this.jwtToken, this.userData});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: DriverPage(jwtToken: jwtToken, userData: userData),
-    );
-  }
-}
+import '../profile/profile_page.dart';
+import 'driver_tracking_page.dart';
+import '../user/previous_rides.dart';
+import '../../config/constants.dart';
+import '../../services/auth_service.dart';
+import '../../services/websocket_service.dart';
+import '../../router/app_router.dart';
 
 class DriverPage extends StatefulWidget {
   final String? jwtToken;
@@ -64,70 +44,74 @@ class _DriverPageState extends State<DriverPage> {
   Timer? _locationUpdateTimer;
   Position? _currentPosition;
   LatLng? _mapPosition; // For displaying on map
-  StreamSubscription<Position>? _positionStreamSubscription;
   int? _currentRideId;
 
   // API Configuration uses centralized base URL from constants
 
   List<Map<String, dynamic>> notifications = [];
   Set<int> _rejectedRideIds = {}; // Local storage for rejected ride IDs
-  WebSocketChannel? _driverSocket;
-  StreamSubscription? _driverSocketSubscription;
-  Timer? _socketReconnectTimer;
-  bool _shouldMaintainSocket = true;
-  bool _socketTransferred = false;
-  int _socketReconnectAttempts = 0;
+  final WebSocketService _wsService = WebSocketService();
+  StreamSubscription? _wsSubscription;
+  StreamSubscription<Position>? _positionStreamSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadRejectedRides(); // Load rejected rides from local storage
     _loadDriverData();
-    _initializeLocation();
-    _initializeDriverSocket();
+    _loadCurrentLocation();
   }
 
   @override
   void dispose() {
-    _shouldMaintainSocket = false;
-    _socketReconnectTimer?.cancel();
+    // Cancel WebSocket subscription safely
+    try {
+      _wsSubscription?.cancel();
+      _wsSubscription = null;
+    } catch (e) {
+      print('Error cancelling WebSocket subscription: $e');
+    }
 
     // Ensure server marks driver offline when the app/widget is disposed
     _sendDriverOfflineSilently();
 
-    if (!_socketTransferred) {
-      _cancelDriverSocket();
-    } else {
-      // If we transferred the subscription to tracking page, don't close the socket here.
-      _logSocket(
-        'Socket ownership transferred to tracking page; leaving socket open',
-      );
+    // Cancel position stream subscription safely
+    try {
+      _positionStreamSubscription?.cancel();
+      _positionStreamSubscription = null;
+    } catch (e) {
+      print('Error cancelling position stream subscription: $e');
     }
-    _locationUpdateTimer?.cancel();
-    _positionStreamSubscription?.cancel();
+
     super.dispose();
   }
 
-  Future<void> _initializeLocation() async {
+  Future<void> _loadCurrentLocation() async {
     try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) throw Exception('Location services are disabled.');
       // Check location permission
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          print('Location permissions are denied');
-          return;
+          throw Exception('Location permission denied.');
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
-        print('Location permissions are permanently denied');
-        return;
+        throw Exception('Location permissions are permanently denied.');
       }
 
-      // Get current location
-      await _getCurrentLocation();
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
 
+      _safeSetState(() {
+        _mapPosition = LatLng(position.latitude, position.longitude);
+      });
+
+      print('Initial Location: ${position.latitude}, ${position.longitude}');
       // Location updates will be started after loading driver profile
     } catch (e) {
       print('Error initializing location: $e');
@@ -136,6 +120,7 @@ class _DriverPageState extends State<DriverPage> {
 
   Future<void> _getCurrentLocation() async {
     try {
+      await Geolocator.requestPermission();
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
@@ -147,6 +132,10 @@ class _DriverPageState extends State<DriverPage> {
       });
 
       print('Current location: ${position.latitude}, ${position.longitude}');
+
+      if (widget.jwtToken != null) {
+        _connectDriverSocket();
+      }
     } catch (e) {
       print('Error getting current location: $e');
     }
@@ -182,10 +171,20 @@ class _DriverPageState extends State<DriverPage> {
   }
 
   void _stopLocationUpdates() {
-    _locationUpdateTimer?.cancel();
-    _locationUpdateTimer = null;
-    _positionStreamSubscription?.cancel();
-    _positionStreamSubscription = null;
+    try {
+      _locationUpdateTimer?.cancel();
+      _locationUpdateTimer = null;
+    } catch (e) {
+      print('Error cancelling location update timer: $e');
+    }
+
+    try {
+      _positionStreamSubscription?.cancel();
+      _positionStreamSubscription = null;
+    } catch (e) {
+      print('Error cancelling position stream subscription: $e');
+    }
+
     print('Location update stream/timer stopped');
   }
 
@@ -196,93 +195,30 @@ class _DriverPageState extends State<DriverPage> {
 
   void _logSocket(String message) => _logDriver(message, tag: 'DriverSocket');
 
-  bool get _canUseDriverSocket =>
-      (widget.jwtToken?.isNotEmpty ?? false) ||
-      (widget.sessionId?.isNotEmpty ?? false);
-
-  // Driver socket URI is constructed when connecting using `buildWsUri`.
-
-  String _buildCookieHeader() {
-    final cookies = <String>[];
-    if (widget.sessionId != null && widget.sessionId!.isNotEmpty) {
-      cookies.add('sessionid=${widget.sessionId}');
-    }
-    if (widget.csrfToken != null && widget.csrfToken!.isNotEmpty) {
-      cookies.add('csrftoken=${widget.csrfToken}');
-    }
-    return cookies.join('; ');
-  }
-
-  void _initializeDriverSocket() {
-    if (!_canUseDriverSocket) {
-      _logSocket('Skipping WS init - missing session cookie');
-      return;
-    }
-
-    _logSocket('Initializing driver WebSocket connection');
-    _connectDriverSocket();
-  }
-
-  void _connectDriverSocket({bool isReconnect = false}) {
-    if (!_canUseDriverSocket || !_shouldMaintainSocket) {
-      _logSocket(
-        'WS connect aborted - allowed=$_canUseDriverSocket maintain=$_shouldMaintainSocket',
-      );
-      return;
-    }
-
-    _socketReconnectTimer?.cancel();
-
-    final cookieHeader = _buildCookieHeader();
-    final headers = <String, dynamic>{};
-    if (cookieHeader.isNotEmpty) {
-      headers['Cookie'] = cookieHeader;
-    }
-
-    _logSocket('Connecting to driver WebSocket (retry=$isReconnect)');
-
+  void _connectDriverSocket() {
     try {
-      final queryParams = <String, String>{};
-      if (widget.jwtToken?.isNotEmpty ?? false) {
-        queryParams['token'] = widget.jwtToken!;
-      }
-      if (widget.sessionId?.isNotEmpty ?? false) {
-        queryParams['sessionid'] = widget.sessionId!;
-      }
-      if (widget.csrfToken?.isNotEmpty ?? false) {
-        queryParams['csrftoken'] = widget.csrfToken!;
-      }
-
-      final uri = buildWsUri('/ws/app/', queryParams: queryParams);
-      final channel = createPlatformWebSocket(
-        uri,
-        headers: headers.isEmpty ? null : headers,
+      // Connect using centralized WebSocket service
+      _wsService.connectDriver(
+        jwtToken: widget.jwtToken,
+        sessionId: widget.sessionId,
+        csrfToken: widget.csrfToken,
       );
 
-      _driverSocketSubscription?.cancel();
-      _driverSocketSubscription = channel.stream.listen(
-        _handleSocketMessage,
-        onError: _handleSocketError,
-        onDone: () => _handleSocketClosed(null, null),
-        cancelOnError: false,
-      );
-
-      _driverSocket = channel;
-
-      _safeSetState(() {
-        _socketReconnectAttempts = 0;
+      // Subscribe to driver messages
+      _wsSubscription = _wsService.driverMessages.listen((data) {
+        if (!mounted) return;
+        print("DRIVER WS RAW → $data");
+        _handleDriverSocketMessage(data);
       });
-      // reset failure counter (not tracked in UI)
-      _logSocket('WebSocket connection opened (reconnect=$isReconnect)');
-    } catch (error) {
-      _handleSocketError(error);
+
+      _logSocket('Driver WebSocket connected via service');
+    } catch (e) {
+      print('Failed to connect driver WebSocket: $e');
     }
   }
 
-  void _handleSocketMessage(dynamic message) {
+  void _handleDriverSocketMessage(Map<String, dynamic> data) {
     try {
-      final rawPayload = message is String ? message : message.toString();
-      final data = json.decode(rawPayload) as Map<String, dynamic>;
       final eventType = data['type'] as String?;
       _logSocket('Message <- ${eventType ?? 'unknown'}');
 
@@ -352,7 +288,7 @@ class _DriverPageState extends State<DriverPage> {
           print('Unhandled WS event: $data');
       }
     } catch (e) {
-      print('Error decoding driver WS message: $e | raw=$message');
+      print('Error decoding driver WS message: $e | raw=$data');
     }
   }
 
@@ -444,54 +380,6 @@ class _DriverPageState extends State<DriverPage> {
     }
   }
 
-  void _handleSocketError(dynamic error) {
-    _logSocket('Error: $error');
-    _driverSocketSubscription?.cancel();
-    _driverSocketSubscription = null;
-    _driverSocket = null;
-    // increment failure counter (not tracked in UI)
-
-    _safeSetState(() {});
-
-    _scheduleSocketReconnect();
-  }
-
-  void _handleSocketClosed(int? code, String? reason) {
-    _logSocket('Closed code=$code reason=$reason');
-    _driverSocketSubscription?.cancel();
-    _driverSocketSubscription = null;
-    _driverSocket = null;
-
-    _safeSetState(() {});
-
-    _scheduleSocketReconnect();
-  }
-
-  void _scheduleSocketReconnect() {
-    if (!_shouldMaintainSocket || !_canUseDriverSocket) {
-      _logSocket(
-        'Reconnect suppressed - shouldMaintain=$_shouldMaintainSocket canUse=$_canUseDriverSocket',
-      );
-      return;
-    }
-
-    _socketReconnectTimer?.cancel();
-    _socketReconnectAttempts += 1;
-    _logSocket('Scheduling reconnect attempt #$_socketReconnectAttempts');
-    _socketReconnectTimer = Timer(const Duration(seconds: 5), () {
-      if (!_shouldMaintainSocket) return;
-      _connectDriverSocket(isReconnect: true);
-    });
-  }
-
-  void _cancelDriverSocket() {
-    _driverSocketSubscription?.cancel();
-    _driverSocketSubscription = null;
-    _driverSocket?.sink.close(ws_status.normalClosure);
-    _driverSocket = null;
-    _logSocket('Socket resources disposed');
-  }
-
   void _safeSetState(VoidCallback fn) {
     if (!mounted) return;
     setState(fn);
@@ -505,49 +393,46 @@ class _DriverPageState extends State<DriverPage> {
   }
 
   Future<void> _sendLocationToServer(Position position) async {
-    _currentPosition = position;
+    // Get current GPS location before updating status
+    if (_currentPosition == null) {
+      await _getCurrentLocation();
+    }
     _safeSetState(() {
       _mapPosition = LatLng(position.latitude, position.longitude);
     });
 
-    if (_driverSocket != null) {
-      try {
-        double truncatedLatitude = double.parse(
-          position.latitude.toStringAsFixed(6),
+    try {
+      double truncatedLatitude = double.parse(
+        position.latitude.toStringAsFixed(6),
+      );
+      double truncatedLongitude = double.parse(
+        position.longitude.toStringAsFixed(6),
+      );
+
+      if (_currentRideId != null) {
+        print(
+          'Sending Tracking Update for ride $_currentRideId: $truncatedLatitude, $truncatedLongitude',
         );
-        double truncatedLongitude = double.parse(
-          position.longitude.toStringAsFixed(6),
+
+        _wsService.sendDriverMessage({
+          'type': 'tracking_update',
+          'ride_id': _currentRideId,
+          'latitude': truncatedLatitude,
+          'longitude': truncatedLongitude,
+        });
+      } else if (isActive) {
+        print(
+          'Sending Updated Location via WS (stream): $truncatedLatitude, $truncatedLongitude',
         );
 
-        if (_currentRideId != null) {
-          print(
-            'Sending Tracking Update for ride $_currentRideId: $truncatedLatitude, $truncatedLongitude',
-          );
-
-          final wsPayload = json.encode({
-            'type': 'tracking_update',
-            'ride_id': _currentRideId,
-            'latitude': truncatedLatitude,
-            'longitude': truncatedLongitude,
-          });
-          _driverSocket!.sink.add(wsPayload);
-        } else if (isActive) {
-          print(
-            'Sending Updated Location via WS (stream): $truncatedLatitude, $truncatedLongitude',
-          );
-
-          final wsPayload = json.encode({
-            'type': 'driver_location_update',
-            'latitude': truncatedLatitude,
-            'longitude': truncatedLongitude,
-          });
-          _driverSocket!.sink.add(wsPayload);
-        }
-      } catch (e) {
-        print('Error sending driver location via WebSocket: $e');
+        _wsService.sendDriverMessage({
+          'type': 'driver_location_update',
+          'latitude': truncatedLatitude,
+          'longitude': truncatedLongitude,
+        });
       }
-    } else {
-      print('ERROR: WebSocket not connected - cannot send location');
+    } catch (e) {
+      print('Error sending driver location via WebSocket: $e');
     }
   }
 
@@ -567,7 +452,6 @@ class _DriverPageState extends State<DriverPage> {
     try {
       // Load driver profile first, then nearby rides (need profile for fallback location)
       await _fetchDriverProfile();
-      // No need to fetch nearby rides via REST; ride requests come via WebSocket.
 
       // Start location updates if driver is active
       if (isActive) {
@@ -765,14 +649,9 @@ class _DriverPageState extends State<DriverPage> {
         // Mark current ride id so location updates are sent as tracking_update
         _currentRideId = rideId;
 
-        // Navigate to ride tracking page
+        // Navigate to ride tracking page - WebSocket service persists
         if (mounted) {
-          // Transfer the existing socket subscription to the tracking page
-          _socketTransferred = true;
-          final transferredSubscription = _driverSocketSubscription;
-          _driverSocketSubscription = null;
-
-          Navigator.push(
+          Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (_) => RideTrackingPage(
@@ -795,9 +674,6 @@ class _DriverPageState extends State<DriverPage> {
                     ? double.tryParse(notification['dropoff_lng'].toString())
                     : null,
                 accessToken: widget.jwtToken,
-                rideSocket: _driverSocket,
-                socketSubscription: transferredSubscription,
-                isDriver: true,
               ),
             ),
           );
@@ -872,8 +748,8 @@ class _DriverPageState extends State<DriverPage> {
         },
         body: json.encode({'status': 'offline'}),
       );
-    } catch (_) {
-      // ignore errors during dispose
+    } catch (e) {
+      print('Error sending offline status on dispose: $e');
     }
   }
 
@@ -985,14 +861,17 @@ class _DriverPageState extends State<DriverPage> {
                     child: const Text('Cancel'),
                   ),
                   TextButton(
-                    onPressed: () {
+                    onPressed: () async {
                       Navigator.pop(context); // Close dialog
-                      // Navigate back to start page and clear all previous routes
-                      Navigator.pushNamedAndRemoveUntil(
-                        context,
-                        '/',
-                        (route) => false,
-                      );
+                      // Clear auth data and navigate to splash
+                      await AuthService().clearAuthData();
+                      if (context.mounted) {
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          AppRouter.splash,
+                          (route) => false,
+                        );
+                      }
                     },
                     child: const Text(
                       'Logout',

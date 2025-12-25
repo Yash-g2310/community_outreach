@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'constants.dart';
+import '../../config/constants.dart';
 
 class PreviousRidesPage extends StatefulWidget {
   final String jwtToken;

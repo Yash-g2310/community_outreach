@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import '../constants.dart';
+import '../config/constants.dart';
 import '../models/profile_model.dart';
 
 class ProfileService {

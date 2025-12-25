@@ -5,36 +5,17 @@ import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_ti
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
 import 'dart:async';
-import 'constants.dart';
-import 'ws_utils.dart';
-import 'profile_page.dart';
-import 'utils/string_utils.dart';
+import '../../config/constants.dart';
+import '../profile/profile_page.dart';
+import '../../utils/string_utils.dart';
 import 'previous_rides.dart';
-import 'utils/socket_channel_factory.dart';
-import 'package:flutter_application_1/user_tracking_page.dart';
-import 'package:flutter_application_1/loading_page2.dart';
-
-void main() {
-  runApp(const ERickUserApp());
-}
-
-class ERickUserApp extends StatelessWidget {
-  final String? jwtToken;
-  final Map<String, dynamic>? userData;
-
-  const ERickUserApp({super.key, this.jwtToken, this.userData});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: UserMapScreen(jwtToken: jwtToken, userData: userData),
-    );
-  }
-}
+import 'user_tracking_page.dart';
+import 'ride_loading_page.dart';
+import '../../services/auth_service.dart';
+import '../../services/websocket_service.dart';
+import '../../router/app_router.dart';
 
 class UserMapScreen extends StatefulWidget {
   final String? jwtToken;
@@ -61,15 +42,13 @@ class _UserMapScreenState extends State<UserMapScreen> {
   bool _isLoading = false;
   final _isLoadingDrivers = false;
   final List<Map<String, dynamic>> _nearbyDrivers = [];
-  Timer? _driversUpdateTimer;
 
-  // WebSocket for ride status updates
-  WebSocketChannel? _passengerSocket;
-  StreamSubscription? _passengerSocketSubscription;
-  bool _socketTransferred = false;
+  // WebSocket service for ride status updates
+  final WebSocketService _wsService = WebSocketService();
+  StreamSubscription? _wsSubscription;
   final Set<String> _processedRideEvents = <String>{};
 
-  // 👇 Controllers for text input fields
+  // Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
   final TextEditingController _dropController = TextEditingController();
   final TextEditingController _passengerController = TextEditingController();
@@ -90,12 +69,15 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
   @override
   void dispose() {
-    _driversUpdateTimer?.cancel();
-    _passengerSocketSubscription?.cancel();
-    // If we transferred the socket to another page, do not close it here.
-    if (!_socketTransferred) {
-      _passengerSocket?.sink.close();
+    // Cancel WebSocket subscription safely
+    try {
+      _wsSubscription?.cancel();
+      _wsSubscription = null;
+    } catch (e) {
+      print('Error cancelling WebSocket subscription: $e');
     }
+
+    // Dispose controllers
     _pickupController.dispose();
     _dropController.dispose();
     _passengerController.dispose();
@@ -122,7 +104,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         desiredAccuracy: LocationAccuracy.high,
       );
 
-      setState(() {
+      _safeSetState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
 
@@ -141,56 +123,34 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   void _connectPassengerSocket() {
     try {
-      // Build websocket Uri from centralized base
-      final uri = buildWsUri(
-        '/ws/app/',
-        queryParams: {
-          if (widget.jwtToken?.isNotEmpty ?? false) 'token': widget.jwtToken!,
-          if (widget.sessionId?.isNotEmpty ?? false)
-            'sessionid': widget.sessionId!,
-          if (widget.csrfToken?.isNotEmpty ?? false)
-            'csrftoken': widget.csrfToken!,
-        },
+      // Connect using centralized WebSocket service
+      _wsService.connectPassenger(
+        jwtToken: widget.jwtToken,
+        sessionId: widget.sessionId,
+        csrfToken: widget.csrfToken,
       );
 
-      _passengerSocket = createPlatformWebSocket(uri);
+      // Subscribe to passenger messages
+      _wsSubscription = _wsService.passengerMessages.listen((data) {
+        if (!mounted) return;
+        print("WS RAW → $data");
+        _handlePassengerSocketMessage(data);
+      });
 
-      print('Passenger WebSocket connected: $uri (user_page)');
-
+      // Subscribe to nearby drivers if we have current position
       if (_currentPosition != null) {
-        _passengerSocket!.sink.add(
-          jsonEncode({
-            "type": "subscribe_nearby",
-            "latitude": _currentPosition!.latitude,
-            "longitude": _currentPosition!.longitude,
-            "radius": 1500, // or whatever radius you use
-          }),
-        );
+        _wsService.sendPassengerMessage({
+          "type": "subscribe_nearby",
+          "latitude": _currentPosition!.latitude,
+          "longitude": _currentPosition!.longitude,
+          "radius": 1500,
+        });
         print("Sent Websocket for Nearby Drivers to backend");
       } else {
         print("Cannot subscribe_nearby — currentPosition is null");
       }
 
-      _passengerSocketSubscription = _passengerSocket!.stream.listen(
-        (message) {
-          if (!mounted) return;
-          // handler may be async; we don't await here but it will await inside as needed
-          print("WS RAW → $message");
-          _handlePassengerSocketMessage(message);
-        },
-        onError: (error) {
-          print('Passenger WebSocket error: $error');
-        },
-        onDone: () {
-          print('Passenger WebSocket connection closed');
-        },
-      );
-
-      // Logging: subscription created
-      try {
-        final ts = DateTime.now().toIso8601String();
-        print('Passenger WS subscription created at $ts');
-      } catch (_) {}
+      print('Passenger WebSocket connected via service (user_page)');
     } catch (e) {
       print('Failed to connect passenger WebSocket: $e');
     }
@@ -199,10 +159,10 @@ class _UserMapScreenState extends State<UserMapScreen> {
   // ============================================================
   // 📨 Handle incoming WebSocket messages
   // ============================================================
-  Future<void> _handlePassengerSocketMessage(dynamic message) async {
+  Future<void> _handlePassengerSocketMessage(Map<String, dynamic> data) async {
     try {
-      final data = jsonDecode(message);
-      final eventType = data['type'];
+      final eventType = data['type'] as String?;
+      if (eventType == null) return;
 
       // Only dedupe ride-related events
       if (eventType.startsWith("ride_")) {
@@ -219,21 +179,9 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
       switch (eventType) {
         case 'ride_accepted':
-          // Driver accepted the ride. Transfer socket ownership to the
-          // tracking page so it can subscribe and receive tracking updates.
+          // Driver accepted the ride. Navigate to tracking page.
+          // WebSocket service persists, so no transfer needed.
           print('Driver accepted ride (user_page) — opening tracking page');
-          // Mark transfer so dispose won't close the shared socket.
-          // Transfer ownership of the socket subscription to the tracking page
-          _socketTransferred = true;
-          final transferredSubscription = _passengerSocketSubscription;
-          // Clear local reference so dispose won't cancel it
-          _passengerSocketSubscription = null;
-
-          // Logging: transfer prepared
-          try {
-            final ts = DateTime.now().toIso8601String();
-            print('Transferring passenger WS subscription at $ts');
-          } catch (_) {}
 
           // If a loading screen is on top, pop it first so replacement
           // correctly shows the tracking page.
@@ -241,8 +189,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
             Navigator.pop(context);
           }
 
-          // Push the tracking page and pass the existing subscription so the
-          // tracking page can reuse it instead of creating a new listener.
+          // Navigate to tracking page - WebSocket service will handle messages
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -252,24 +199,19 @@ class _UserMapScreenState extends State<UserMapScreen> {
                 csrfToken: widget.csrfToken,
                 refreshToken: widget.refreshToken,
                 userData: widget.userData,
-                passengerSocket: _passengerSocket,
-                socketSubscription: transferredSubscription,
               ),
             ),
           );
-
-          try {
-            final ts2 = DateTime.now().toIso8601String();
-            print('Tracking page opened and subscription transferred at $ts2');
-          } catch (_) {}
           break;
 
         case 'ride_cancelled':
-          // If a loading screen (RideLoadingScreen) is on top, close it
+          // If a loading screen (RideLoadingPage) is on top, close it
           if (Navigator.canPop(context)) {
             try {
               Navigator.pop(context);
             } catch (e) {
+              // Logger would be better but keeping print for now to avoid circular dependency
+              // ignore: avoid_print
               print('Warning popping loading screen on ride_cancelled: $e');
             }
           }
@@ -340,7 +282,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
 
     // Only action needed: remove driver if explicitly offline
     if (status == "offline" || status == "busy") {
-      setState(() {
+      _safeSetState(() {
         _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
       });
     }
@@ -367,7 +309,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
         data['vehicle_no']?.toString() ??
         "N/A";
 
-    setState(() {
+    _safeSetState(() {
       final index = _nearbyDrivers.indexWhere(
         (d) => d['driver_id'] == driverId,
       );
@@ -426,7 +368,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       return;
     }
 
-    setState(() {
+    _safeSetState(() {
       _isLoading = true;
     });
 
@@ -470,7 +412,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => RideLoadingScreen(
+              builder: (_) => RideLoadingPage(
                 jwtToken: widget.jwtToken,
                 sessionId: widget.sessionId,
                 csrfToken: widget.csrfToken,
@@ -493,7 +435,7 @@ class _UserMapScreenState extends State<UserMapScreen> {
       print('Network error: $e');
       _showErrorSnackBar('Network error. Please check your connection.');
     } finally {
-      setState(() {
+      _safeSetState(() {
         _isLoading = false;
       });
     }
@@ -558,15 +500,20 @@ class _UserMapScreenState extends State<UserMapScreen> {
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 print('User Logged out');
 
                 Navigator.of(context).pop(); // Close dialog
 
                 // Navigate back to login page and clear all previous routes
-                Navigator.of(
-                  context,
-                ).pushNamedAndRemoveUntil('/', (Route<dynamic> route) => false);
+                // Clear auth data and navigate to splash
+                await AuthService().clearAuthData();
+                if (context.mounted) {
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    AppRouter.splash,
+                    (Route<dynamic> route) => false,
+                  );
+                }
               },
               child: const Text('Logout', style: TextStyle(color: Colors.red)),
             ),
@@ -574,6 +521,11 @@ class _UserMapScreenState extends State<UserMapScreen> {
         );
       },
     );
+  }
+
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 
   @override

@@ -1,5 +1,5 @@
 import 'dart:core';
-import 'constants.dart';
+import '../config/constants.dart';
 
 /// Build a WebSocket `Uri` from the configured `kBaseUrl`.
 ///

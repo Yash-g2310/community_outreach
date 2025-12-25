@@ -50,6 +50,7 @@ dependencies:
   image_picker_web: ^3.1.1
   file_picker: ^10.3.7
   web_socket_channel: ^2.4.0
+  flutter_dotenv: ^5.1.0
 
 dev_dependencies:
   flutter_test:
@@ -61,6 +62,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.11.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -78,6 +80,7 @@ flutter:
     - assets/download.png
     - assets/erick.png
     - assets/download16.jpeg
+    # .env is loaded dynamically, not as an asset
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -104,3 +107,12 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Configuration for flutter_launcher_icons
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/app_icon.jpg"
+  remove_alpha: false
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/app_icon.jpg"

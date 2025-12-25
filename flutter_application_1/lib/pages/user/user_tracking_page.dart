@@ -7,9 +7,9 @@ import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_ti
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'user_page.dart'; // for navigation back to user page
-import 'constants.dart';
+import '../../config/constants.dart';
+import '../../services/websocket_service.dart';
 
 class UserTrackingPage extends StatefulWidget {
   final String? jwtToken;
@@ -17,8 +17,6 @@ class UserTrackingPage extends StatefulWidget {
   final String? csrfToken;
   final String? refreshToken;
   final Map<String, dynamic>? userData;
-  final WebSocketChannel? passengerSocket;
-  final StreamSubscription? socketSubscription;
 
   const UserTrackingPage({
     super.key,
@@ -27,8 +25,6 @@ class UserTrackingPage extends StatefulWidget {
     this.csrfToken,
     this.refreshToken,
     this.userData,
-    this.passengerSocket,
-    this.socketSubscription,
   });
 
   @override
@@ -45,69 +41,167 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
   String _vehicleNumber = "-";
   String? _currentRideId;
 
-  WebSocketChannel? _rideTrackingSocket;
-  StreamSubscription? _socketSubscription;
+  final WebSocketService _wsService = WebSocketService();
+  StreamSubscription? _wsSubscription;
   final Set<String> _processedRideEvents = <String>{};
 
   @override
   void initState() {
     super.initState();
 
-    // Reuse the same WebSocketChannel
-    _rideTrackingSocket = widget.passengerSocket;
-
-    // Reuse the same StreamSubscription created in user_page
-    _socketSubscription = widget.socketSubscription;
-
-    _setupWebSocketSubscription();
-    _initializeTracking();
-  }
-
-  void _setupWebSocketSubscription() {
-    if (_socketSubscription != null) {
-      // Reuse existing subscription
-      _socketSubscription!.onData(_handleWebSocketMessage);
-      _socketSubscription!.onError((err) => print('Tracking WS error: $err'));
-      _socketSubscription!.onDone(() => print('Tracking WS closed'));
-      return;
-    }
-
-    // No passed subscription → create a new listener
-    if (_rideTrackingSocket != null) {
-      try {
-        _socketSubscription = _rideTrackingSocket!.stream.listen(
-          _handleWebSocketMessage,
-          onError: (err) => print('Tracking WS error: $err'),
-          onDone: () => print('Tracking WS closed'),
-          cancelOnError: false,
-        );
-      } catch (e) {
-        print('Warning: Failed to attach tracking subscription: $e');
-      }
-    } else {
-      print(
-        'Warning: User Tracking Page started without a socket or subscription',
+    // Ensure WebSocket is connected (it should already be from user_page)
+    if (widget.jwtToken != null) {
+      _wsService.connectPassenger(
+        jwtToken: widget.jwtToken,
+        sessionId: widget.sessionId,
+        csrfToken: widget.csrfToken,
       );
     }
+
+    // Subscribe to passenger messages from WebSocket service
+    _wsSubscription = _wsService.passengerMessages.listen((data) {
+      if (!mounted) return;
+      _handleWebSocketMessage(data);
+    });
+
+    _setupTracking();
   }
 
   @override
   void dispose() {
     _sendStopTracking();
-    // Do NOT close the shared socket, only cancel local listeners if any
+    // Cancel local subscription only - WebSocket service persists
     try {
-      _socketSubscription?.cancel();
+      _wsSubscription?.cancel();
+      _wsSubscription = null;
     } catch (e) {
       print('Error cancelling tracking subscription: $e');
     }
     super.dispose();
   }
 
-  // Handle incoming WebSocket messages for ride tracking
-  void _handleWebSocketMessage(dynamic message) {
+  Future<void> _setupTracking() async {
+    await _getCurrentLocation();
+    await _getCurrentRideInfo(); // Get ride ID and initial driver info
+    if (_currentRideId != null) {
+      _sendStartTracking();
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
     try {
-      final rawPayload = message is String ? message : message.toString();
-      final data = json.decode(rawPayload) as Map<String, dynamic>;
+      Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      if (!mounted) return;
+
+      _safeSetState(() {
+        _userPosition = LatLng(pos.latitude, pos.longitude);
+      });
+    } catch (e) {
+      print('Error getting user location: $e');
+    }
+  }
+
+  // ============================================================
+  // Get current ride info (ID + initial driver data)
+  // ============================================================
+  Future<void> _getCurrentRideInfo() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$kBaseUrl/api/rides/passenger/current/'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${widget.jwtToken}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['has_active_ride'] == true &&
+            data['driver_assigned'] == true) {
+          final ride = data['ride'];
+          final driver = ride['driver'];
+
+          _safeSetState(() {
+            _currentRideId = ride['id']?.toString();
+            _status = ride['status'] ?? "N/A";
+            _username = driver['username'] ?? "N/A";
+            _phoneNumber = driver['phone_number'] ?? "N/A";
+            _vehicleNumber = driver['vehicle_number'] ?? "N/A";
+
+            final lat = double.tryParse(driver['current_latitude'] ?? "");
+            final lng = double.tryParse(driver['current_longitude'] ?? "");
+            if (lat != null && lng != null) {
+              _driverPosition = LatLng(lat, lng);
+            }
+          });
+
+          print('Ride ID: $_currentRideId, Driver: $_username');
+        }
+      }
+    } catch (e) {
+      print('Error getting ride info: $e');
+    }
+  }
+
+  // Send start_tracking message to join ride group
+  void _sendStartTracking() {
+    if (_currentRideId != null) {
+      _wsService.sendPassengerMessage({
+        'type': 'start_tracking',
+        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
+      });
+      print('Sent start_tracking for ride $_currentRideId');
+    }
+  }
+
+  // Send stop_tracking message to leave ride group (optional, e.g. on dispose)
+  void _sendStopTracking() {
+    if (_currentRideId != null) {
+      _wsService.sendPassengerMessage({
+        'type': 'stop_tracking',
+        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
+      });
+      print('Sent stop_tracking for ride $_currentRideId');
+    }
+  }
+
+  // ============================================================
+  // Get current ride ID for cancellation
+  // ============================================================
+  Future<String?> _getCurrentRideId() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$kBaseUrl/api/rides/passenger/current'),
+        headers: {
+          'Authorization': 'Bearer ${widget.jwtToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final bool hasActiveRide = data['has_active_ride'] ?? false;
+
+        if (hasActiveRide) {
+          final rideData = data['ride'] ?? {};
+          return rideData['id']?.toString();
+        }
+      }
+      return null;
+    } catch (e) {
+      print('Error getting current ride ID: $e');
+      return null;
+    }
+  }
+
+  // Handle incoming WebSocket messages for ride tracking
+  void _handleWebSocketMessage(Map<String, dynamic> data) {
+    if (!mounted) return;
+    try {
       final eventType = data['type'] as String?;
       if (eventType == null) return;
 
@@ -141,14 +235,14 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           }
 
           if (lat != null && lng != null) {
-            setState(() {
+            _safeSetState(() {
               _driverPosition = LatLng(lat!, lng!);
             });
           }
           break;
 
         case 'ride_cancelled':
-          setState(() {
+          _safeSetState(() {
             _status = 'cancelled';
           });
 
@@ -171,7 +265,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                     } catch (_) {}
 
                     try {
-                      await _socketSubscription?.cancel();
+                      await _wsSubscription?.cancel();
                     } catch (e) {
                       print(
                         'Error cancelling tracking subscription on ride_cancelled: $e',
@@ -201,7 +295,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           break;
 
         case 'ride_completed':
-          setState(() {
+          _safeSetState(() {
             _status = 'completed';
           });
 
@@ -229,7 +323,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
             } catch (_) {}
 
             try {
-              await _socketSubscription?.cancel();
+              await _wsSubscription?.cancel();
             } catch (e) {
               print(
                 'Error cancelling tracking subscription on ride_completed: $e',
@@ -254,124 +348,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
         // ignore other events
       }
     } catch (e) {
-      print('Error decoding tracking WS message: $e | raw=$message');
-    }
-  }
-
-  Future<void> _initializeTracking() async {
-    await _getCurrentLocation();
-    await _getCurrentRideInfo(); // Get ride ID and initial driver info
-    if (_currentRideId != null) {
-      _sendStartTracking();
-    }
-  }
-
-  Future<void> _getCurrentLocation() async {
-    try {
-      Position pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      setState(() {
-        _userPosition = LatLng(pos.latitude, pos.longitude);
-      });
-    } catch (e) {
-      print('Error getting user location: $e');
-    }
-  }
-
-  // ============================================================
-  // Get current ride info (ID + initial driver data)
-  // ============================================================
-  Future<void> _getCurrentRideInfo() async {
-    try {
-      final response = await http.get(
-        Uri.parse('$kBaseUrl/api/rides/passenger/current/'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${widget.jwtToken}',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-
-        if (data['has_active_ride'] == true &&
-            data['driver_assigned'] == true) {
-          final ride = data['ride'];
-          final driver = ride['driver'];
-
-          setState(() {
-            _currentRideId = ride['id']?.toString();
-            _status = ride['status'] ?? "N/A";
-            _username = driver['username'] ?? "N/A";
-            _phoneNumber = driver['phone_number'] ?? "N/A";
-            _vehicleNumber = driver['vehicle_number'] ?? "N/A";
-
-            final lat = double.tryParse(driver['current_latitude'] ?? "");
-            final lng = double.tryParse(driver['current_longitude'] ?? "");
-            if (lat != null && lng != null) {
-              _driverPosition = LatLng(lat, lng);
-            }
-          });
-
-          print('Ride ID: $_currentRideId, Driver: $_username');
-        }
-      }
-    } catch (e) {
-      print('Error getting ride info: $e');
-    }
-  }
-
-  // Send start_tracking message to join ride group
-  void _sendStartTracking() {
-    if (_rideTrackingSocket != null && _currentRideId != null) {
-      final msg = jsonEncode({
-        'type': 'start_tracking',
-        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
-      });
-      _rideTrackingSocket!.sink.add(msg);
-      print('Sent start_tracking for ride $_currentRideId');
-    }
-  }
-
-  // Send stop_tracking message to leave ride group (optional, e.g. on dispose)
-  void _sendStopTracking() {
-    if (_rideTrackingSocket != null && _currentRideId != null) {
-      final msg = jsonEncode({
-        'type': 'stop_tracking',
-        'ride_id': int.tryParse(_currentRideId ?? '') ?? _currentRideId,
-      });
-      _rideTrackingSocket!.sink.add(msg);
-      print('Sent stop_tracking for ride $_currentRideId');
-    }
-  }
-
-  // ============================================================
-  // Get current ride ID for cancellation
-  // ============================================================
-  Future<String?> _getCurrentRideId() async {
-    try {
-      final response = await http.get(
-        Uri.parse('$kBaseUrl/api/rides/passenger/current'),
-        headers: {
-          'Authorization': 'Bearer ${widget.jwtToken}',
-          'Content-Type': 'application/json',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final bool hasActiveRide = data['has_active_ride'] ?? false;
-
-        if (hasActiveRide) {
-          final rideData = data['ride'] ?? {};
-          return rideData['id']?.toString();
-        }
-      }
-      return null;
-    } catch (e) {
-      print('Error getting current ride ID: $e');
-      return null;
+      print('Error decoding tracking WS message: $e | raw=$data');
     }
   }
 
@@ -417,6 +394,11 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
     }
   }
 
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -428,8 +410,8 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
           onPressed: () {
             print('Navigating back from tracking to user page');
 
-            // Close local listener only; do NOT close the shared socket.
-            _socketSubscription?.cancel();
+            // Cancel local subscription only - WebSocket service persists
+            _wsSubscription?.cancel();
 
             // Navigate back to UserMapScreen with proper parameters
             Navigator.pushReplacement(
@@ -613,7 +595,7 @@ class _UserTrackingPageState extends State<UserTrackingPage> {
                                     );
 
                                     // Cancel local listener and navigate back to UserMapScreen
-                                    _socketSubscription?.cancel();
+                                    _wsSubscription?.cancel();
 
                                     Navigator.pushReplacement(
                                       context,

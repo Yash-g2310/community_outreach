@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
 
-void main() {
-  runApp(const LoadingOverlay());
-}
-
 class LoadingOverlay extends StatelessWidget {
   const LoadingOverlay({super.key});
 

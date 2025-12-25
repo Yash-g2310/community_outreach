@@ -6,10 +6,9 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
-import 'dart:convert';
-import 'erick_driver_page.dart';
-import 'constants.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'driver_page.dart';
+import '../../config/constants.dart';
+import '../../services/websocket_service.dart';
 
 class RideTrackingPage extends StatefulWidget {
   final int rideId;
@@ -26,9 +25,6 @@ class RideTrackingPage extends StatefulWidget {
   final double? dropoffLat;
   final double? dropoffLng;
   final String? accessToken;
-  final bool isDriver;
-  final WebSocketChannel? rideSocket; // WebSocket channel for ride group events
-  final StreamSubscription? socketSubscription;
 
   const RideTrackingPage({
     super.key,
@@ -46,9 +42,6 @@ class RideTrackingPage extends StatefulWidget {
     this.dropoffLat,
     this.dropoffLng,
     this.accessToken,
-    required this.isDriver,
-    this.rideSocket,
-    this.socketSubscription,
   });
 
   @override
@@ -60,7 +53,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   String _rideStatus = 'accepted';
   bool _isLoading = false;
   Timer? _locationTimer;
-  WebSocketChannel? _rideTrackingSocket;
+  final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
 
   // API Configuration uses centralized base URL from constants
@@ -69,39 +62,41 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
   void initState() {
     super.initState();
 
-    _rideTrackingSocket = widget.rideSocket;
-    _wsSubscription = widget.socketSubscription;
+    // Ensure WebSocket is connected (it should already be from driver_page)
+    if (widget.accessToken != null) {
+      _wsService.connectDriver(jwtToken: widget.accessToken);
+    }
 
-    _setupWebSocketSubscription();
+    // Subscribe to driver messages from WebSocket service
+    _wsSubscription = _wsService.driverMessages.listen((data) {
+      if (!mounted) return;
+      _handleWebSocketMessage(data);
+    });
+
     _setupTracking();
   }
 
-  void _setupWebSocketSubscription() {
-    if (_wsSubscription != null) {
-      // Reuse existing subscription
-      _wsSubscription!.onData(_handleWebSocketMessage);
-      _wsSubscription!.onError((err) => print('Tracking WS error: $err'));
-      _wsSubscription!.onDone(() => print('Tracking WS closed'));
-      return;
+  @override
+  void dispose() {
+    // Cancel location timer safely
+    try {
+      _locationTimer?.cancel();
+      _locationTimer = null;
+    } catch (e) {
+      print('Error cancelling location timer: $e');
     }
 
-    // No passed subscription → create a new listener
-    if (_rideTrackingSocket != null) {
-      try {
-        _wsSubscription = _rideTrackingSocket!.stream.listen(
-          _handleWebSocketMessage,
-          onError: (err) => print('Tracking WS error: $err'),
-          onDone: () => print('Tracking WS closed'),
-          cancelOnError: false,
-        );
-      } catch (e) {
-        print('Warning: Failed to attach tracking subscription: $e');
-      }
-    } else {
-      print(
-        'Warning: Driver Tracking Page started without a socket or subscription',
-      );
+    _sendStopTracking();
+
+    // Cancel WebSocket subscription safely
+    try {
+      _wsSubscription?.cancel();
+      _wsSubscription = null;
+    } catch (e) {
+      print('Error cancelling tracking subscription: $e');
     }
+
+    super.dispose();
   }
 
   Future<void> _setupTracking() async {
@@ -110,24 +105,15 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
     _sendStartTracking(); // Now start listening to WS messages
   }
 
-  @override
-  void dispose() {
-    _locationTimer?.cancel();
-    try {
-      _wsSubscription?.cancel();
-    } catch (e) {
-      print('Error cancelling tracking subscription: $e');
-    }
-    super.dispose();
-  }
-
   Future<void> _getCurrentLocation() async {
     try {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
 
-      setState(() {
+      if (!mounted) return;
+
+      _safeSetState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
       });
     } catch (e) {
@@ -144,28 +130,34 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
   // Listen for WebSocket ride tracking events
   void _sendStartTracking() {
-    // If no socket is available, do nothing
-    final socket = widget.rideSocket;
-    if (socket == null) {
-      print("Driver Tracking Page: No socket available for start_tracking");
-      return;
-    }
-
-    // Send start_tracking only ONCE
+    // Send start_tracking via WebSocket service
     try {
-      socket.sink.add(
-        json.encode({'type': 'start_tracking', 'ride_id': widget.rideId}),
-      );
+      _wsService.sendDriverMessage({
+        'type': 'start_tracking',
+        'ride_id': widget.rideId,
+      });
       print("Driver Tracking Page: Sent start_tracking");
     } catch (e) {
       print("Driver Tracking Page: Error sending start_tracking: $e");
     }
   }
 
-  void _handleWebSocketMessage(dynamic message) {
+  // Send stop_tracking message to leave ride group (optional, e.g. on dispose)
+  void _sendStopTracking() {
     try {
-      final raw = message is String ? message : message.toString();
-      final data = json.decode(raw) as Map<String, dynamic>;
+      _wsService.sendDriverMessage({
+        'type': 'stop_tracking',
+        'ride_id': widget.rideId,
+      });
+      print('Sent stop_tracking for ride ${widget.rideId}');
+    } catch (e) {
+      print('Error sending stop_tracking: $e');
+    }
+  }
+
+  void _handleWebSocketMessage(Map<String, dynamic> data) {
+    if (!mounted) return;
+    try {
       final eventType = data['type'] as String?;
       if (eventType == null) return;
 
@@ -173,20 +165,39 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
       switch (eventType) {
         case 'ride_cancelled':
-          setState(() => _rideStatus = 'cancelled');
+          _safeSetState(() => _rideStatus = 'cancelled');
 
           final msg = data['message'] ?? 'Ride cancelled';
           messenger.showSnackBar(
             SnackBar(backgroundColor: Colors.orange, content: Text(msg)),
           );
 
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) Navigator.pop(context);
+          Future.delayed(const Duration(seconds: 2), () async {
+            if (!mounted) return;
+            // For drivers, navigate back to the main DriverPage instead of
+            // popping (which can expose a previous auth/login route).
+            try {
+              _wsService.sendDriverMessage({
+                'type': 'stop_tracking',
+                'ride_id': widget.rideId,
+              });
+            } catch (e) {
+              print('Error sending stop_tracking: $e');
+            }
+
+            if (!mounted) return;
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              ),
+            );
           });
           break;
 
         case 'ride_expired':
-          setState(() => _rideStatus = 'expired');
+          _safeSetState(() => _rideStatus = 'expired');
 
           final msg = data['message'] ?? 'Ride offer expired';
           messenger.showSnackBar(
@@ -199,42 +210,23 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           break;
 
         case 'ride_completed':
-          setState(() => _rideStatus = 'completed');
+          _safeSetState(() => _rideStatus = 'completed');
 
-          if (widget.isDriver) {
-            // Stop tracking best-effort
-            try {
-              widget.rideSocket?.sink.add(
-                json.encode({
-                  'type': 'stop_tracking',
-                  'ride_id': widget.rideId,
-                }),
-              );
-            } catch (_) {}
-
-            try {
-              _wsSubscription?.cancel();
-            } catch (_) {}
-
-            if (!mounted) return;
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => DriverPage(jwtToken: widget.accessToken),
-              ),
-            );
-          } else {
-            messenger.showSnackBar(
-              const SnackBar(
-                content: Text('Ride completed!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) Navigator.pop(context);
+          // Stop tracking best-effort
+          try {
+            _wsService.sendDriverMessage({
+              'type': 'stop_tracking',
+              'ride_id': widget.rideId,
             });
-          }
+          } catch (_) {}
+
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverPage(jwtToken: widget.accessToken),
+            ),
+          );
           break;
 
         default:
@@ -242,14 +234,14 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
           break;
       }
     } catch (e) {
-      print('Error decoding WS message: $e | raw=$message');
+      print('Error decoding WS message: $e | raw=$data');
     }
   }
 
   Future<void> _completeRide() async {
     if (widget.accessToken == null) return;
 
-    setState(() {
+    _safeSetState(() {
       _isLoading = true;
     });
 
@@ -265,7 +257,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        setState(() {
+        _safeSetState(() {
           _rideStatus = 'completed';
         });
 
@@ -282,27 +274,22 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
           // Best-effort: stop tracking
           try {
-            final sink = widget.rideSocket?.sink;
-            sink?.add(
-              json.encode({'type': 'stop_tracking', 'ride_id': widget.rideId}),
-            );
+            _wsService.sendDriverMessage({
+              'type': 'stop_tracking',
+              'ride_id': widget.rideId,
+            });
           } catch (_) {}
 
           try {
             _wsSubscription?.cancel();
           } catch (_) {}
 
-          if (widget.isDriver) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => DriverPage(jwtToken: widget.accessToken),
-              ),
-            );
-          } else {
-            debugPrint('Ride completed — returning to previous page...');
-            Navigator.pop(context);
-          }
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverPage(jwtToken: widget.accessToken),
+            ),
+          );
         });
       } else {
         throw Exception('Failed to complete ride: ${response.statusCode}');
@@ -318,7 +305,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       }
     } finally {
       if (mounted) {
-        setState(() {
+        _safeSetState(() {
           _isLoading = false;
         });
       }
@@ -355,7 +342,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       return;
     }
 
-    setState(() {
+    _safeSetState(() {
       _isLoading = true;
     });
 
@@ -382,7 +369,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       if (response.statusCode == 200) {
         debugPrint('Ride cancelled successfully.');
 
-        setState(() {
+        _safeSetState(() {
           _rideStatus = 'cancelled';
         });
 
@@ -399,29 +386,22 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
 
           // Best-effort: stop tracking
           try {
-            final sink = widget.rideSocket?.sink;
-            sink?.add(
-              json.encode({'type': 'stop_tracking', 'ride_id': widget.rideId}),
-            );
+            _wsService.sendDriverMessage({
+              'type': 'stop_tracking',
+              'ride_id': widget.rideId,
+            });
           } catch (_) {}
 
           try {
             _wsSubscription?.cancel();
           } catch (_) {}
 
-          if (widget.isDriver) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => DriverPage(jwtToken: widget.accessToken),
-              ),
-            );
-          } else {
-            if (mounted) {
-              debugPrint('Ride cancelled — returning to previous page...');
-              Navigator.pop(context); // Just go back one page
-            }
-          }
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverPage(jwtToken: widget.accessToken),
+            ),
+          );
         });
       } else {
         // Non-success status code — log details
@@ -441,23 +421,24 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
       }
     } finally {
       if (mounted) {
-        setState(() {
+        _safeSetState(() {
           _isLoading = false;
         });
       }
     }
   }
 
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          widget.isDriver
-              ? 'Driver - Ride #${widget.rideId}'
-              : 'Your Ride #${widget.rideId}',
-        ),
-        backgroundColor: widget.isDriver ? Colors.blue[700] : Colors.green[700],
+        title: Text('Driver - Ride #${widget.rideId}'),
+        backgroundColor: Colors.blue[700],
         automaticallyImplyLeading: false, // This removes the back button
       ),
       body: _currentPosition == null
@@ -469,13 +450,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: widget.isDriver ? Colors.blue[50] : Colors.green[50],
+                    color: Colors.blue[50],
                     border: Border(
-                      bottom: BorderSide(
-                        color: widget.isDriver
-                            ? Colors.blue[200]!
-                            : Colors.green[200]!,
-                      ),
+                      bottom: BorderSide(color: Colors.blue[200]!),
                     ),
                   ),
                   child: Column(
@@ -485,9 +462,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                         children: [
                           Icon(
                             Icons.info_outline,
-                            color: widget.isDriver
-                                ? Colors.blue[700]
-                                : Colors.green[700],
+                            color: Colors.blue[700],
                             size: 20,
                           ),
                           const SizedBox(width: 8),
@@ -496,9 +471,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: widget.isDriver
-                                  ? Colors.blue[700]
-                                  : Colors.green[700],
+                              color: Colors.blue[700],
                             ),
                           ),
                           const Spacer(),
@@ -529,7 +502,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                       const SizedBox(height: 12),
 
                       // Contact info
-                      if (widget.isDriver && widget.passengerName != null) ...[
+                      if (widget.passengerName != null) ...[
                         Row(
                           children: [
                             const Icon(Icons.person, size: 16),
@@ -543,31 +516,6 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                             ],
                           ],
                         ),
-                        const SizedBox(height: 8),
-                      ],
-
-                      if (!widget.isDriver && widget.driverName != null) ...[
-                        Row(
-                          children: [
-                            const Icon(Icons.local_taxi, size: 16),
-                            const SizedBox(width: 8),
-                            Text('Driver: ${widget.driverName}'),
-                            if (widget.vehicleNumber != null) ...[
-                              const SizedBox(width: 8),
-                              Text('(${widget.vehicleNumber})'),
-                            ],
-                          ],
-                        ),
-                        if (widget.driverPhone != null) ...[
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              const Icon(Icons.phone, size: 16),
-                              const SizedBox(width: 8),
-                              Text(widget.driverPhone!),
-                            ],
-                          ),
-                        ],
                         const SizedBox(height: 8),
                       ],
 
@@ -644,13 +592,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                                       vertical: 2,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: widget.isDriver
-                                          ? Colors.blue
-                                          : Colors.green,
+                                      color: Colors.blue,
                                       borderRadius: BorderRadius.circular(4),
                                     ),
                                     child: Text(
-                                      widget.isDriver ? 'Driver' : 'You',
+                                      'Driver',
                                       style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 10,
@@ -659,12 +605,8 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                                     ),
                                   ),
                                   Icon(
-                                    widget.isDriver
-                                        ? Icons.local_taxi
-                                        : Icons.person_pin_circle,
-                                    color: widget.isDriver
-                                        ? Colors.blue
-                                        : Colors.green,
+                                    Icons.local_taxi,
+                                    color: Colors.blue,
                                     size: 35,
                                   ),
                                 ],
@@ -764,34 +706,33 @@ class _RideTrackingPageState extends State<RideTrackingPage> {
                       ),
                       const SizedBox(width: 16),
                       // Complete button (only for driver)
-                      if (widget.isDriver)
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _isLoading || _rideStatus != 'accepted'
-                                ? null
-                                : _completeRide,
-                            icon: _isLoading
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white,
-                                      ),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading || _rideStatus != 'accepted'
+                              ? null
+                              : _completeRide,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
                                     ),
-                                  )
-                                : const Icon(Icons.check_circle),
-                            label: Text(
-                              _isLoading ? 'Completing...' : 'Complete',
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
+                                  ),
+                                )
+                              : const Icon(Icons.check_circle),
+                          label: Text(
+                            _isLoading ? 'Completing...' : 'Complete',
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
+                      ),
                     ],
                   ),
                 ),
