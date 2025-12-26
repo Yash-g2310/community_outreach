@@ -95,10 +95,7 @@ class AppRouter {
           );
         }
 
-        return UserMapScreen(
-          jwtToken: authState.accessToken,
-          userData: authState.userData,
-        );
+        return const UserMapScreen();
       },
     );
   }
@@ -125,10 +122,7 @@ class AppRouter {
           );
         }
 
-        return DriverPage(
-          jwtToken: authState.accessToken,
-          userData: authState.userData,
-        );
+        return const DriverPage();
       },
     );
   }

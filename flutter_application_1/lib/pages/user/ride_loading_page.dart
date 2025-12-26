@@ -5,23 +5,14 @@ import '../../config/api_endpoints.dart';
 import '../../config/app_constants.dart';
 import '../../services/api_service.dart';
 import '../../services/error_service.dart';
+import '../../services/auth_service.dart';
 import '../../router/app_router.dart';
 
 class RideLoadingPage extends StatefulWidget {
-  final String? jwtToken;
-  final String? sessionId;
-  final String? csrfToken;
-  final String? refreshToken;
-  final Map<String, dynamic>? userData;
   final int? rideId;
 
   const RideLoadingPage({
     super.key,
-    this.jwtToken,
-    this.sessionId,
-    this.csrfToken,
-    this.refreshToken,
-    this.userData,
     this.rideId,
   });
 
@@ -36,6 +27,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
   late final Animation<double> _outerScale;
   final ErrorService _errorService = ErrorService();
   final ApiService _apiService = ApiService();
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -205,7 +197,8 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                     child: OutlinedButton(
                       onPressed: () async {
                         // Try to cancel the ride on the backend if we have a rideId
-                        if (widget.rideId != null && widget.jwtToken != null) {
+                        final authState = await _authService.getAuthState();
+                        if (widget.rideId != null && authState.isAuthenticated) {
                           try {
                             final resp = await _apiService.post(
                               PassengerEndpoints.cancel(widget.rideId!),
@@ -237,13 +230,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
 
                         AppRouter.pushReplacement(
                           context,
-                          UserMapScreen(
-                            jwtToken: widget.jwtToken,
-                            sessionId: widget.sessionId,
-                            csrfToken: widget.csrfToken,
-                            refreshToken: widget.refreshToken,
-                            userData: widget.userData,
-                          ),
+                          const UserMapScreen(),
                         );
                       },
                       style: OutlinedButton.styleFrom(

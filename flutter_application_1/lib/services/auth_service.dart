@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../config/api_endpoints.dart';
 import 'websocket_service.dart';
 import 'logger_service.dart';
 
@@ -96,6 +98,46 @@ class AuthService {
         error: e,
         tag: 'AuthService',
       );
+    }
+  }
+
+  /// Refresh access token using refresh token
+  /// Returns true if refresh was successful, false otherwise
+  Future<bool> refreshAccessToken() async {
+    await init();
+    final refreshToken = await getRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) {
+      Logger.warning(
+        'Cannot refresh token: no refresh token available',
+        tag: 'AuthService',
+      );
+      return false;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse(AuthEndpoints.refresh),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'refresh': refreshToken}),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final newAccessToken = data['access']?.toString();
+        if (newAccessToken != null && newAccessToken.isNotEmpty) {
+          await _prefs?.setString(_keyAccessToken, newAccessToken);
+          Logger.info('Access token refreshed successfully', tag: 'AuthService');
+          return true;
+        }
+      }
+      Logger.warning(
+        'Token refresh failed: ${response.statusCode}',
+        tag: 'AuthService',
+      );
+      return false;
+    } catch (e) {
+      Logger.error('Error refreshing token', error: e, tag: 'AuthService');
+      return false;
     }
   }
 

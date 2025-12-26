@@ -21,20 +21,7 @@ import '../../core/widgets/ride_notification_list.dart';
 import '../../core/widgets/ride_request_bottom_sheet.dart';
 
 class DriverPage extends StatefulWidget {
-  final String? jwtToken;
-  final Map<String, dynamic>? userData;
-  final String? sessionId;
-  final String? csrfToken;
-  final String? refreshToken;
-
-  const DriverPage({
-    super.key,
-    this.jwtToken,
-    this.userData,
-    this.sessionId,
-    this.csrfToken,
-    this.refreshToken,
-  });
+  const DriverPage({super.key});
 
   @override
   State<DriverPage> createState() => _DriverPageState();
@@ -148,11 +135,13 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   }
 
   Future<void> _connectDriverSocket() async {
-    final token = await _authService.getAccessToken();
+    final authState = await _authService.getAuthState();
+    if (!authState.isAuthenticated) return;
+    
     await _wsController.connect(
-      jwtToken: token,
-      sessionId: widget.sessionId,
-      csrfToken: widget.csrfToken,
+      jwtToken: authState.accessToken,
+      sessionId: null, // Not needed - WebSocket handles auth via token
+      csrfToken: null, // Not needed - WebSocket handles auth via token
       onMessage: (data) {
         if (!mounted) return;
         _wsController.processMessage(
@@ -171,12 +160,13 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     );
   }
 
-  void _handleIncomingRide(Map<String, dynamic> ridePayload) {
+  void _handleIncomingRide(Map<String, dynamic> ridePayload) async {
     final rideId = ridePayload['id'];
     if (rideId == null) return;
 
     // Check if previously rejected
-    final driverId = widget.userData?['id']?.toString() ?? 'unknown';
+    final userData = await _authService.getUserData();
+    final driverId = userData?['id']?.toString() ?? 'unknown';
     _wsController.rideController.loadRejectedRides(driverId).then((rejected) {
       if (rejected.contains(rideId)) {
         Logger.debug(
@@ -391,7 +381,6 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
               dropoffLng: notification['dropoff_lng'] != null
                   ? double.tryParse(notification['dropoff_lng'].toString())
                   : null,
-              accessToken: token,
             ),
           );
         }
@@ -406,7 +395,8 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   }
 
   Future<void> _rejectRide(int rideId) async {
-    final driverId = widget.userData?['id']?.toString() ?? 'unknown';
+    final userData = await _authService.getUserData();
+    final driverId = userData?['id']?.toString() ?? 'unknown';
     safeSetState(() => isLoading = true);
 
     try {
@@ -470,17 +460,17 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
 
   // Handle rides navigation
   Future<void> _handleRidesNavigation() async {
-    final token = await _authService.getAccessToken();
-    if (token == null || token.isEmpty) {
+    final authState = await _authService.getAuthState();
+    if (!authState.isAuthenticated) {
       if (!mounted) return;
       _errorService.showError(
         context,
-        'No access token available. Please login to view previous rides.',
+        'Please login to view previous rides.',
       );
       return;
     }
     if (!mounted) return;
-    AppRouter.push(context, PreviousRidesPage(jwtToken: token, isDriver: true));
+    AppRouter.push(context, const PreviousRidesPage(isDriver: true));
   }
 
   void _showBottomSheet(Map<String, dynamic> notif) {

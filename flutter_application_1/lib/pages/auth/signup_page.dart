@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/api_service.dart';
+import '../../services/auth_service.dart';
 import '../../utils/validators.dart';
 import '../../router/app_router.dart';
 
@@ -35,6 +37,7 @@ class _SignupPageState extends State<SignupPage> {
   final TextEditingController _erickNoController = TextEditingController();
 
   final ErrorService _errorService = ErrorService();
+  final ApiService _apiService = ApiService();
 
   @override
   void dispose() {
@@ -131,10 +134,10 @@ class _SignupPageState extends State<SignupPage> {
         requestData['vehicle_number'] = _erickNoController.text.trim();
       }
 
-      final response = await http.post(
-        Uri.parse(AuthEndpoints.register),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(requestData),
+      final response = await _apiService.post(
+        AuthEndpoints.register,
+        body: requestData,
+        requiresAuth: false,
       );
 
       Logger.network('=== API RESPONSE ===', tag: 'Signup');
@@ -220,25 +223,25 @@ class _SignupPageState extends State<SignupPage> {
     if (_profileImageBytes == null) return;
 
     try {
-      var request = http.MultipartRequest(
-        'PATCH',
-        Uri.parse(UserProfileEndpoints.profile),
-      );
+      // Save token temporarily for this upload
+      // Note: This is a workaround since ApiService uses AuthService
+      // In a real scenario, we might want to pass token directly to multipart
+      final authService = AuthService();
+      await authService.saveAuthData(accessToken: accessToken);
 
-      request.headers['Authorization'] = 'Bearer $accessToken';
-
-      // Add image file
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'profile_picture',
-          _profileImageBytes!,
-          filename: _profileImagePath ?? 'profile.jpg',
-        ),
+      final file = http.MultipartFile.fromBytes(
+        'profile_picture',
+        _profileImageBytes!,
+        filename: _profileImagePath ?? 'profile.jpg',
       );
 
       Logger.info('Uploading profile picture...', tag: 'Signup');
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await _apiService.postMultipart(
+        UserProfileEndpoints.profile,
+        method: 'PATCH',
+        files: [file],
+        requiresAuth: true,
+      );
 
       Logger.debug('Upload Status: ${response.statusCode}', tag: 'Signup');
       Logger.debug('Upload Response: ${response.body}', tag: 'Signup');

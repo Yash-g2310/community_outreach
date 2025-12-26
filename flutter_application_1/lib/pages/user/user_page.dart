@@ -19,20 +19,7 @@ import '../../core/widgets/nearby_drivers_info.dart';
 import '../../core/widgets/ride_request_form.dart';
 
 class UserMapScreen extends StatefulWidget {
-  final String? jwtToken;
-  final Map<String, dynamic>? userData;
-  final String? sessionId;
-  final String? csrfToken;
-  final String? refreshToken;
-
-  const UserMapScreen({
-    super.key,
-    this.jwtToken,
-    this.sessionId,
-    this.csrfToken,
-    this.refreshToken,
-    this.userData,
-  });
+  const UserMapScreen({super.key});
 
   @override
   State<UserMapScreen> createState() => _UserMapScreenState();
@@ -94,8 +81,8 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       );
 
       // Check if authenticated before connecting WebSocket
-      final token = await _authService.getAccessToken();
-      if (token != null && token.isNotEmpty) {
+      final authState = await _authService.getAuthState();
+      if (authState.isAuthenticated) {
         _connectPassengerSocket();
       }
     } catch (e) {
@@ -107,11 +94,13 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   // 🔌 Connect to passenger WebSocket for ride status updates
   // ============================================================
   Future<void> _connectPassengerSocket() async {
-    final token = await _authService.getAccessToken();
+    final authState = await _authService.getAuthState();
+    if (!authState.isAuthenticated) return;
+    
     await _wsController.connect(
-      jwtToken: token,
-      sessionId: widget.sessionId,
-      csrfToken: widget.csrfToken,
+      jwtToken: authState.accessToken,
+      sessionId: null, // Not needed - WebSocket handles auth via token
+      csrfToken: null, // Not needed - WebSocket handles auth via token
       currentPosition: _currentPosition,
       onMessage: _handlePassengerSocketMessage,
     );
@@ -147,21 +136,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
             AppRouter.pop(context);
           }
 
-          // Get auth data from AuthService for navigation
-          final token = await _authService.getAccessToken();
-          final userData = await _authService.getUserData();
-          final refreshToken = await _authService.getRefreshToken();
-
           // Navigate to tracking page - WebSocket service will handle messages
           AppRouter.pushReplacement(
             context,
-            UserTrackingPage(
-              jwtToken: token,
-              sessionId: widget.sessionId,
-              csrfToken: widget.csrfToken,
-              refreshToken: refreshToken,
-              userData: userData,
-            ),
+            const UserTrackingPage(),
           );
           break;
 
@@ -363,22 +341,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         _dropController.clear();
         _passengerController.clear();
 
-        // Get user data and navigate to loading page
-        final token = await _authService.getAccessToken();
-        final userData = await _authService.getUserData();
-        final refreshToken = await _authService.getRefreshToken();
-
         if (mounted) {
           AppRouter.push(
             context,
-            RideLoadingPage(
-              jwtToken: token,
-              sessionId: widget.sessionId,
-              csrfToken: widget.csrfToken,
-              refreshToken: refreshToken,
-              userData: userData,
-              rideId: responseData['id'],
-            ),
+            RideLoadingPage(rideId: responseData['id']),
           );
         }
       } else {
@@ -409,19 +375,19 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
 
   // Handle rides navigation
   Future<void> _handleRidesNavigation() async {
-    final token = await _authService.getAccessToken();
-    if (token == null || token.isEmpty) {
+    final authState = await _authService.getAuthState();
+    if (!authState.isAuthenticated) {
       if (!mounted) return;
       _errorService.showError(
         context,
-        'No access token available. Please login to view previous rides.',
+        'Please login to view previous rides.',
       );
       return;
     }
     if (!mounted) return;
     AppRouter.push(
       context,
-      PreviousRidesPage(jwtToken: token, isDriver: false),
+      const PreviousRidesPage(isDriver: false),
     );
   }
 

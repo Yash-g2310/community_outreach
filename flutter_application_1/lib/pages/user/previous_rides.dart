@@ -1,18 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../../config/api_endpoints.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../services/api_service.dart';
 import '../../router/app_router.dart';
 
 class PreviousRidesPage extends StatefulWidget {
-  final String jwtToken;
   final bool isDriver; // Required (Must be provided by caller)
 
   const PreviousRidesPage({
     super.key,
-    required this.jwtToken,
     required this.isDriver,
   });
 
@@ -25,6 +23,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
   bool isLoading = true;
   late bool isDriver; // true = driver, false = passenger
   final ErrorService _errorService = ErrorService();
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -39,13 +38,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
         : PassengerEndpoints.history;
 
     try {
-      final res = await http.get(
-        Uri.parse(endpoint),
-        headers: {
-          'Authorization': 'Bearer ${widget.jwtToken}',
-          'Content-Type': 'application/json',
-        },
-      );
+      final res = await _apiService.get(endpoint);
 
       if (res.statusCode == 200) {
         final data = json.decode(res.body);

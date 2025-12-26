@@ -183,31 +183,9 @@ class _LoginScreenState extends State<LoginScreen> {
     Widget destinationPage;
 
     if (role == 'driver') {
-      destinationPage = DriverPage(
-        jwtToken: accessToken,
-        sessionId: extraContext?['sessionId'] as String?,
-        csrfToken: extraContext?['csrfToken'] as String?,
-        refreshToken: extraContext?['refreshToken'] as String?,
-        userData: {
-          'username': userName,
-          'email': userEmail,
-          'role': role,
-          if (rawUserData != null) ...rawUserData,
-        },
-      );
+      destinationPage = const DriverPage();
     } else {
-      destinationPage = UserMapScreen(
-        jwtToken: accessToken,
-        sessionId: extraContext?['sessionId'] as String?,
-        csrfToken: extraContext?['csrfToken'] as String?,
-        refreshToken: extraContext?['refreshToken'] as String?,
-        userData: {
-          'username': userName,
-          'email': userEmail,
-          'role': role,
-          if (rawUserData != null) ...rawUserData,
-        },
-      );
+      destinationPage = const UserMapScreen();
     }
 
     // Replace current screen (so user can't go back to login)

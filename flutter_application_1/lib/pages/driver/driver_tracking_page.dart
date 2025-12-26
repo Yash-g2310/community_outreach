@@ -8,6 +8,7 @@ import 'driver_page.dart';
 import '../../config/api_endpoints.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
+import '../../services/auth_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
@@ -29,7 +30,6 @@ class RideTrackingPage extends StatefulWidget {
   final double? pickupLng;
   final double? dropoffLat;
   final double? dropoffLng;
-  final String? accessToken;
 
   const RideTrackingPage({
     super.key,
@@ -46,7 +46,6 @@ class RideTrackingPage extends StatefulWidget {
     this.pickupLng,
     this.dropoffLat,
     this.dropoffLng,
-    this.accessToken,
   });
 
   @override
@@ -63,6 +62,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
   StreamSubscription? _wsSubscription;
   final ErrorService _errorService = ErrorService();
   final ApiService _apiService = ApiService();
+  final AuthService _authService = AuthService();
 
   // API Configuration uses centralized base URL from constants
 
@@ -71,9 +71,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
     super.initState();
 
     // Ensure WebSocket is connected (it should already be from driver_page)
-    if (widget.accessToken != null) {
-      _wsService.connectDriver(jwtToken: widget.accessToken);
-    }
+    _connectDriverSocket();
 
     // Subscribe to driver messages from WebSocket service
     _wsSubscription = _wsService.driverMessages.listen((data) {
@@ -82,6 +80,13 @@ class _RideTrackingPageState extends State<RideTrackingPage>
     });
 
     _setupTracking();
+  }
+
+  Future<void> _connectDriverSocket() async {
+    final authState = await _authService.getAuthState();
+    if (authState.isAuthenticated) {
+      _wsService.connectDriver(jwtToken: authState.accessToken);
+    }
   }
 
   @override
@@ -228,7 +233,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
 
             AppRouter.pushReplacement(
               context,
-              DriverPage(jwtToken: widget.accessToken),
+              const DriverPage(),
             );
           });
           break;
@@ -260,7 +265,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
           if (!mounted) return;
           AppRouter.pushReplacement(
             context,
-            DriverPage(jwtToken: widget.accessToken),
+            const DriverPage(),
           );
           break;
 
@@ -277,7 +282,6 @@ class _RideTrackingPageState extends State<RideTrackingPage>
   }
 
   Future<void> _completeRide() async {
-    if (widget.accessToken == null) return;
 
     safeSetState(() {
       _isLoading = true;
@@ -316,7 +320,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              builder: (context) => const DriverPage(),
             ),
           );
         });
@@ -337,7 +341,6 @@ class _RideTrackingPageState extends State<RideTrackingPage>
   }
 
   Future<void> _cancelRide() async {
-    if (widget.accessToken == null) return;
 
     // Ask user for confirmation
     final shouldCancel = await showDialog<bool>(
@@ -421,7 +424,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => DriverPage(jwtToken: widget.accessToken),
+              builder: (context) => const DriverPage(),
             ),
           );
         });
