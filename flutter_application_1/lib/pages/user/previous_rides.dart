@@ -9,10 +9,7 @@ import '../../router/app_router.dart';
 class PreviousRidesPage extends StatefulWidget {
   final bool isDriver; // Required (Must be provided by caller)
 
-  const PreviousRidesPage({
-    super.key,
-    required this.isDriver,
-  });
+  const PreviousRidesPage({super.key, required this.isDriver});
 
   @override
   State<PreviousRidesPage> createState() => _PreviousRidesPageState();

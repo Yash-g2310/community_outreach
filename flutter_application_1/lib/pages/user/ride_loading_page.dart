@@ -11,10 +11,7 @@ import '../../router/app_router.dart';
 class RideLoadingPage extends StatefulWidget {
   final int? rideId;
 
-  const RideLoadingPage({
-    super.key,
-    this.rideId,
-  });
+  const RideLoadingPage({super.key, this.rideId});
 
   @override
   State<RideLoadingPage> createState() => _RideLoadingPageState();
@@ -198,7 +195,8 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                       onPressed: () async {
                         // Try to cancel the ride on the backend if we have a rideId
                         final authState = await _authService.getAuthState();
-                        if (widget.rideId != null && authState.isAuthenticated) {
+                        if (widget.rideId != null &&
+                            authState.isAuthenticated) {
                           try {
                             final resp = await _apiService.post(
                               PassengerEndpoints.cancel(widget.rideId!),

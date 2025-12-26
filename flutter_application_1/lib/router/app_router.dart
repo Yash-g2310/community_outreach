@@ -139,10 +139,7 @@ class AppRouter {
   }) {
     return Navigator.push<T>(
       context,
-      MaterialPageRoute(
-        builder: (_) => page,
-        settings: settings,
-      ),
+      MaterialPageRoute(builder: (_) => page, settings: settings),
     );
   }
 
@@ -152,11 +149,7 @@ class AppRouter {
     String routeName, {
     Object? arguments,
   }) {
-    return Navigator.pushNamed<T>(
-      context,
-      routeName,
-      arguments: arguments,
-    );
+    return Navigator.pushNamed<T>(context, routeName, arguments: arguments);
   }
 
   /// Replace the current route with a new route
@@ -168,10 +161,7 @@ class AppRouter {
   }) {
     return Navigator.pushReplacement<T, TO>(
       context,
-      MaterialPageRoute(
-        builder: (_) => page,
-        settings: settings,
-      ),
+      MaterialPageRoute(builder: (_) => page, settings: settings),
       result: result,
     );
   }
@@ -200,10 +190,7 @@ class AppRouter {
   }) {
     return Navigator.pushAndRemoveUntil<T>(
       context,
-      MaterialPageRoute(
-        builder: (_) => page,
-        settings: settings,
-      ),
+      MaterialPageRoute(builder: (_) => page, settings: settings),
       predicate,
     );
   }

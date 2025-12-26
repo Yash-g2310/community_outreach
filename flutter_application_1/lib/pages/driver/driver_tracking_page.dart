@@ -231,10 +231,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
 
             if (!mounted) return;
 
-            AppRouter.pushReplacement(
-              context,
-              const DriverPage(),
-            );
+            AppRouter.pushReplacement(context, const DriverPage());
           });
           break;
 
@@ -263,10 +260,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
           } catch (_) {}
 
           if (!mounted) return;
-          AppRouter.pushReplacement(
-            context,
-            const DriverPage(),
-          );
+          AppRouter.pushReplacement(context, const DriverPage());
           break;
 
         default:
@@ -282,7 +276,6 @@ class _RideTrackingPageState extends State<RideTrackingPage>
   }
 
   Future<void> _completeRide() async {
-
     safeSetState(() {
       _isLoading = true;
     });
@@ -319,9 +312,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
 
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => const DriverPage(),
-            ),
+            MaterialPageRoute(builder: (context) => const DriverPage()),
           );
         });
       } else {
@@ -341,7 +332,6 @@ class _RideTrackingPageState extends State<RideTrackingPage>
   }
 
   Future<void> _cancelRide() async {
-
     // Ask user for confirmation
     final shouldCancel = await showDialog<bool>(
       context: context,
@@ -423,9 +413,7 @@ class _RideTrackingPageState extends State<RideTrackingPage>
 
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => const DriverPage(),
-            ),
+            MaterialPageRoute(builder: (context) => const DriverPage()),
           );
         });
       } else {

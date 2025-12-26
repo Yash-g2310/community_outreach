@@ -137,7 +137,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   Future<void> _connectDriverSocket() async {
     final authState = await _authService.getAuthState();
     if (!authState.isAuthenticated) return;
-    
+
     await _wsController.connect(
       jwtToken: authState.accessToken,
       sessionId: null, // Not needed - WebSocket handles auth via token
@@ -463,10 +463,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     final authState = await _authService.getAuthState();
     if (!authState.isAuthenticated) {
       if (!mounted) return;
-      _errorService.showError(
-        context,
-        'Please login to view previous rides.',
-      );
+      _errorService.showError(context, 'Please login to view previous rides.');
       return;
     }
     if (!mounted) return;

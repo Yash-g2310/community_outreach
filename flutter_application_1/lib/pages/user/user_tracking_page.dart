@@ -293,10 +293,7 @@ class _UserTrackingPageState extends State<UserTrackingPage>
                     }
                     if (!mounted) return;
                     // Navigate back to main UserMapScreen
-                    AppRouter.pushReplacement(
-                      context,
-                      const UserMapScreen(),
-                    );
+                    AppRouter.pushReplacement(context, const UserMapScreen());
                   },
                   child: const Text('OK'),
                 ),
@@ -345,10 +342,7 @@ class _UserTrackingPageState extends State<UserTrackingPage>
             }
             if (!mounted) return;
             // Navigate back to main UserMapScreen so user lands on the map
-            AppRouter.pushReplacement(
-              context,
-              const UserMapScreen(),
-            );
+            AppRouter.pushReplacement(context, const UserMapScreen());
           });
           break;
         // ignore other events
@@ -428,10 +422,7 @@ class _UserTrackingPageState extends State<UserTrackingPage>
             _wsSubscription?.cancel();
 
             // Navigate back to UserMapScreen with proper parameters
-            AppRouter.pushReplacement(
-              context,
-              const UserMapScreen(),
-            );
+            AppRouter.pushReplacement(context, const UserMapScreen());
           },
         ),
       ),

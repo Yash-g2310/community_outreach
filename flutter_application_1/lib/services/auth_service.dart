@@ -115,18 +115,23 @@ class AuthService {
     }
 
     try {
-      final response = await http.post(
-        Uri.parse(AuthEndpoints.refresh),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'refresh': refreshToken}),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse(AuthEndpoints.refresh),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'refresh': refreshToken}),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
         final newAccessToken = data['access']?.toString();
         if (newAccessToken != null && newAccessToken.isNotEmpty) {
           await _prefs?.setString(_keyAccessToken, newAccessToken);
-          Logger.info('Access token refreshed successfully', tag: 'AuthService');
+          Logger.info(
+            'Access token refreshed successfully',
+            tag: 'AuthService',
+          );
           return true;
         }
       }

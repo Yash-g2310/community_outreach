@@ -96,7 +96,7 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   Future<void> _connectPassengerSocket() async {
     final authState = await _authService.getAuthState();
     if (!authState.isAuthenticated) return;
-    
+
     await _wsController.connect(
       jwtToken: authState.accessToken,
       sessionId: null, // Not needed - WebSocket handles auth via token
@@ -137,10 +137,7 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
           }
 
           // Navigate to tracking page - WebSocket service will handle messages
-          AppRouter.pushReplacement(
-            context,
-            const UserTrackingPage(),
-          );
+          AppRouter.pushReplacement(context, const UserTrackingPage());
           break;
 
         case 'ride_cancelled':
@@ -342,10 +339,7 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         _passengerController.clear();
 
         if (mounted) {
-          AppRouter.push(
-            context,
-            RideLoadingPage(rideId: responseData['id']),
-          );
+          AppRouter.push(context, RideLoadingPage(rideId: responseData['id']));
         }
       } else {
         _errorService.showError(context, 'Failed to create ride request');
@@ -378,17 +372,11 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
     final authState = await _authService.getAuthState();
     if (!authState.isAuthenticated) {
       if (!mounted) return;
-      _errorService.showError(
-        context,
-        'Please login to view previous rides.',
-      );
+      _errorService.showError(context, 'Please login to view previous rides.');
       return;
     }
     if (!mounted) return;
-    AppRouter.push(
-      context,
-      const PreviousRidesPage(isDriver: false),
-    );
+    AppRouter.push(context, const PreviousRidesPage(isDriver: false));
   }
 
   // Show an AlertDialog for important passenger events (cancel/expired/no drivers)
