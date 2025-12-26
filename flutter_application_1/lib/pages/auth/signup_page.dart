@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../utils/validators.dart';
+import '../../router/app_router.dart';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -273,7 +274,7 @@ class _SignupPageState extends State<SignupPage> {
                     // Back button
                     IconButton(
                       icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: () => AppRouter.pop(context),
                     ),
                     const SizedBox(height: 10),
 
@@ -452,7 +453,7 @@ class _SignupPageState extends State<SignupPage> {
                     // Login link
                     Center(
                       child: TextButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () => AppRouter.pop(context),
                         child: const Text(
                           "Already have an account? Log in",
                           style: TextStyle(

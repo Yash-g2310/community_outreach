@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import '../../config/constants.dart';
-import 'package:http/http.dart' as http;
+import '../../config/api_endpoints.dart';
 import 'dart:convert';
 import '../driver/driver_page.dart';
 import '../user/user_page.dart';
 import '../../core/widgets/loading_overlay.dart';
 import '../../services/auth_service.dart';
+import '../../services/api_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../utils/validators.dart';
@@ -21,8 +21,6 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
-  static final String _loginEndpoint = '$kBaseUrl/api/auth/login/';
-
   // Form key for validation
   final _formKey = GlobalKey<FormState>();
 
@@ -31,6 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
 
   final ErrorService _errorService = ErrorService();
+  final ApiService _apiService = ApiService();
 
   @override
   void dispose() {
@@ -72,15 +71,15 @@ class _LoginScreenState extends State<LoginScreen> {
     final requestId = DateTime.now().millisecondsSinceEpoch;
     final stopwatch = Stopwatch()..start();
     Logger.info(
-      '($requestId) Login Request :: username=$username endpoint=$_loginEndpoint',
+      '($requestId) Login Request :: username=$username endpoint=${AuthEndpoints.login}',
       tag: 'Login',
     );
 
     try {
-      final response = await http.post(
-        Uri.parse(_loginEndpoint),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+      final response = await _apiService.post(
+        AuthEndpoints.login,
+        body: {'username': username, 'password': password},
+        requiresAuth: false,
       );
 
       stopwatch.stop();
@@ -164,7 +163,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void _navigateToSignup() {
     Logger.info('Navigating to Sign Up Page', tag: 'Login');
 
-    Navigator.pushNamed(context, AppRouter.signup);
+    AppRouter.pushNamed(context, AppRouter.signup);
   }
 
   // Navigate to appropriate page based on user role
@@ -212,10 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     // Replace current screen (so user can't go back to login)
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => destinationPage),
-    );
+    AppRouter.pushReplacement(context, destinationPage);
   }
 
   @override
@@ -236,7 +232,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     IconButton(
                       icon: const Icon(Icons.arrow_back_ios_new, size: 20),
                       onPressed: () {
-                        Navigator.pop(context);
+                        AppRouter.pop(context);
                       },
                     ),
                     const SizedBox(height: 10),

@@ -1,24 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:async';
-import '../../config/constants.dart';
 import '../profile/profile_page.dart';
 import '../../utils/string_utils.dart';
 import 'previous_rides.dart';
 import 'user_tracking_page.dart';
 import 'ride_loading_page.dart';
 import '../../services/auth_service.dart';
-import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
 import '../../router/app_router.dart';
 import '../../core/mixins/safe_state_mixin.dart';
+import '../../core/controllers/user_websocket_controller.dart';
+import '../../core/controllers/user_ride_controller.dart';
+import '../../core/widgets/user_map_widget.dart';
+import '../../core/widgets/nearby_drivers_info.dart';
+import '../../core/widgets/ride_request_form.dart';
 
 class UserMapScreen extends StatefulWidget {
   final String? jwtToken;
@@ -46,11 +44,11 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   final _isLoadingDrivers = false;
   final List<Map<String, dynamic>> _nearbyDrivers = [];
 
-  // WebSocket service for ride status updates
-  final WebSocketService _wsService = WebSocketService();
-  StreamSubscription? _wsSubscription;
-  final Set<String> _processedRideEvents = <String>{};
+  // Services and controllers
+  final AuthService _authService = AuthService();
   final ErrorService _errorService = ErrorService();
+  final UserWebSocketController _wsController = UserWebSocketController();
+  final UserRideController _rideController = UserRideController();
 
   // Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -58,12 +56,6 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   final TextEditingController _passengerController = TextEditingController();
 
   // API Configuration uses centralized base URL from constants
-
-  // Helper method to truncate coordinates to 6 decimal places
-  double _truncateCoordinate(double coordinate) {
-    // Truncate to 6 decimal places to fit Django model constraints (max_digits=10, decimal_places=6)
-    return double.parse(coordinate.toStringAsFixed(6));
-  }
 
   @override
   void initState() {
@@ -73,19 +65,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
 
   @override
   void dispose() {
-    // Cancel WebSocket subscription safely
-    try {
-      _wsSubscription?.cancel();
-      _wsSubscription = null;
-    } catch (e) {
-      Logger.error(
-        'Error cancelling WebSocket subscription',
-        error: e,
-        tag: 'UserPage',
-      );
-    }
+    // Dispose WebSocket controller
+    _wsController.dispose();
 
-    // Dispose controllers
+    // Dispose text controllers
     _pickupController.dispose();
     _dropController.dispose();
     _passengerController.dispose();
@@ -110,7 +93,9 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         tag: 'UserPage',
       );
 
-      if (widget.jwtToken != null) {
+      // Check if authenticated before connecting WebSocket
+      final token = await _authService.getAccessToken();
+      if (token != null && token.isNotEmpty) {
         _connectPassengerSocket();
       }
     } catch (e) {
@@ -121,52 +106,15 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   // ============================================================
   // 🔌 Connect to passenger WebSocket for ride status updates
   // ============================================================
-  void _connectPassengerSocket() {
-    try {
-      // Connect using centralized WebSocket service
-      _wsService.connectPassenger(
-        jwtToken: widget.jwtToken,
-        sessionId: widget.sessionId,
-        csrfToken: widget.csrfToken,
-      );
-
-      // Subscribe to passenger messages
-      _wsSubscription = _wsService.passengerMessages.listen((data) {
-        if (!mounted) return;
-        Logger.websocket("WS RAW → $data", tag: 'UserPage');
-        _handlePassengerSocketMessage(data);
-      });
-
-      // Subscribe to nearby drivers if we have current position
-      if (_currentPosition != null) {
-        _wsService.sendPassengerMessage({
-          "type": "subscribe_nearby",
-          "latitude": _currentPosition!.latitude,
-          "longitude": _currentPosition!.longitude,
-          "radius": 1500,
-        });
-        Logger.websocket(
-          "Sent Websocket for Nearby Drivers to backend",
-          tag: 'UserPage',
-        );
-      } else {
-        Logger.warning(
-          "Cannot subscribe_nearby — currentPosition is null",
-          tag: 'UserPage',
-        );
-      }
-
-      Logger.websocket(
-        'Passenger WebSocket connected via service (user_page)',
-        tag: 'UserPage',
-      );
-    } catch (e) {
-      Logger.error(
-        'Failed to connect passenger WebSocket',
-        error: e,
-        tag: 'UserPage',
-      );
-    }
+  Future<void> _connectPassengerSocket() async {
+    final token = await _authService.getAccessToken();
+    await _wsController.connect(
+      jwtToken: token,
+      sessionId: widget.sessionId,
+      csrfToken: widget.csrfToken,
+      currentPosition: _currentPosition,
+      onMessage: _handlePassengerSocketMessage,
+    );
   }
 
   // ============================================================
@@ -174,19 +122,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   // ============================================================
   Future<void> _handlePassengerSocketMessage(Map<String, dynamic> data) async {
     try {
+      if (!_wsController.shouldProcessEvent(data)) return;
+
       final eventType = data['type'] as String?;
       if (eventType == null) return;
-
-      // Only dedupe ride-related events
-      if (eventType.startsWith("ride_")) {
-        final rideIdKey = data['ride_id']?.toString() ?? '';
-        final dedupeKey = '${eventType}_$rideIdKey';
-
-        if (_processedRideEvents.contains(dedupeKey)) {
-          return;
-        }
-        _processedRideEvents.add(dedupeKey);
-      }
 
       Logger.websocket(
         'Passenger WS event on user_page: $eventType',
@@ -208,15 +147,20 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
             AppRouter.pop(context);
           }
 
+          // Get auth data from AuthService for navigation
+          final token = await _authService.getAccessToken();
+          final userData = await _authService.getUserData();
+          final refreshToken = await _authService.getRefreshToken();
+
           // Navigate to tracking page - WebSocket service will handle messages
           AppRouter.pushReplacement(
             context,
             UserTrackingPage(
-              jwtToken: widget.jwtToken,
+              jwtToken: token,
               sessionId: widget.sessionId,
               csrfToken: widget.csrfToken,
-              refreshToken: widget.refreshToken,
-              userData: widget.userData,
+              refreshToken: refreshToken,
+              userData: userData,
             ),
           );
           break;
@@ -366,11 +310,6 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   // Create ride request API call
   Future<void> _createRideRequest() async {
     // Validation
-    if (widget.jwtToken == null) {
-      _errorService.showError(context, 'Please login first');
-      return;
-    }
-
     if (_pickupController.text.trim().isEmpty) {
       _errorService.showError(context, 'Please enter pickup location');
       return;
@@ -403,39 +342,17 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       return;
     }
 
-    safeSetState(() {
-      _isLoading = true;
-    });
+    safeSetState(() => _isLoading = true);
 
     try {
-      // Prepare ride data with simplified structure
-      final rideData = {
-        'pickup_latitude': _truncateCoordinate(_currentPosition!.latitude),
-        'pickup_longitude': _truncateCoordinate(_currentPosition!.longitude),
-        'pickup_address': _pickupController.text.trim(),
-        'dropoff_address': _dropController.text.trim(),
-        'number_of_passengers': passengers,
-      };
-
-      Logger.info('Creating ride request: $rideData', tag: 'UserPage');
-
-      final response = await http.post(
-        Uri.parse('$kBaseUrl/api/rides/passenger/request/'),
-        headers: {
-          'Authorization': 'Bearer ${widget.jwtToken}',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode(rideData),
+      final responseData = await _rideController.createRideRequest(
+        currentPosition: _currentPosition!,
+        pickupAddress: _pickupController.text.trim(),
+        dropoffAddress: _dropController.text.trim(),
+        numberOfPassengers: passengers,
       );
 
-      Logger.network(
-        'Response status: ${response.statusCode}',
-        tag: 'UserPage',
-      );
-      Logger.debug('Response body: ${response.body}', tag: 'UserPage');
-
-      if (response.statusCode == 201) {
-        final responseData = json.decode(response.body);
+      if (responseData != null && mounted) {
         _errorService.showSuccess(
           context,
           'Ride request created! ID: ${responseData['id']}',
@@ -446,47 +363,66 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         _dropController.clear();
         _passengerController.clear();
 
+        // Get user data and navigate to loading page
+        final token = await _authService.getAccessToken();
+        final userData = await _authService.getUserData();
+        final refreshToken = await _authService.getRefreshToken();
+
         if (mounted) {
-          // Show UI-only loading screen; keep this page's WebSocket
-          // subscription active so it can detect server response events
-          // (e.g. ride_accepted) and perform the transfer at that time.
           AppRouter.push(
             context,
             RideLoadingPage(
-              jwtToken: widget.jwtToken,
+              jwtToken: token,
               sessionId: widget.sessionId,
               csrfToken: widget.csrfToken,
-              refreshToken: widget.refreshToken,
-              userData: widget.userData,
+              refreshToken: refreshToken,
+              userData: userData,
               rideId: responseData['id'],
             ),
           );
         }
-      } else if (response.statusCode == 400) {
-        final errorData = json.decode(response.body);
-        _errorService.showError(
-          context,
-          'Error: ${errorData['error'] ?? 'Bad request'}',
-        );
-      } else if (response.statusCode == 403) {
-        _errorService.showError(
-          context,
-          'Permission denied. Please login again.',
-        );
       } else {
-        _errorService.showError(context, 'Unexpected error. Please try again.');
+        _errorService.showError(context, 'Failed to create ride request');
       }
     } catch (e) {
-      Logger.error('Network error', error: e, tag: 'UserPage');
+      _errorService.handleError(context, e);
+    } finally {
+      safeSetState(() => _isLoading = false);
+    }
+  }
+
+  // Handle profile navigation
+  Future<void> _handleProfileNavigation() async {
+    final userData = await _authService.getUserData();
+    final token = await _authService.getAccessToken();
+    if (!mounted) return;
+    AppRouter.push(
+      context,
+      ProfilePage(
+        userType: userData?['role']?.toString().capitalize() ?? 'User',
+        userName: userData?['username'] ?? 'E-Rick User',
+        userEmail: userData?['email'] ?? 'user@erick.com',
+        accessToken: token,
+      ),
+    );
+  }
+
+  // Handle rides navigation
+  Future<void> _handleRidesNavigation() async {
+    final token = await _authService.getAccessToken();
+    if (token == null || token.isEmpty) {
+      if (!mounted) return;
       _errorService.showError(
         context,
-        'Network error. Please check your connection.',
+        'No access token available. Please login to view previous rides.',
       );
-    } finally {
-      safeSetState(() {
-        _isLoading = false;
-      });
+      return;
     }
+    if (!mounted) return;
+    AppRouter.push(
+      context,
+      PreviousRidesPage(jwtToken: token, isDriver: false),
+    );
   }
 
   // Show an AlertDialog for important passenger events (cancel/expired/no drivers)
@@ -573,32 +509,9 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
             ),
             onSelected: (value) {
               if (value == 'profile') {
-                AppRouter.push(
-                  context,
-                  ProfilePage(
-                    userType:
-                        widget.userData?['role']?.toString().capitalize() ??
-                        'User',
-                    userName: widget.userData?['username'] ?? 'E-Rick User',
-                    userEmail: widget.userData?['email'] ?? 'user@erick.com',
-                    accessToken: widget.jwtToken,
-                  ),
-                );
+                _handleProfileNavigation();
               } else if (value == 'rides') {
-                if (widget.jwtToken == null || widget.jwtToken!.isEmpty) {
-                  _errorService.showError(
-                    context,
-                    'No access token available. Please login to view previous rides.',
-                  );
-                  return;
-                }
-                AppRouter.push(
-                  context,
-                  PreviousRidesPage(
-                    jwtToken: widget.jwtToken!,
-                    isDriver: false,
-                  ),
-                );
+                _handleRidesNavigation();
               }
             },
             itemBuilder: (context) => [
@@ -618,78 +531,9 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
           : Column(
               children: [
                 // Map (top half)
-                SizedBox(
-                  height: MediaQuery.of(context).size.height * 0.5,
-                  child: FlutterMap(
-                    options: MapOptions(
-                      initialCenter: _currentPosition!,
-                      initialZoom: 16,
-                    ),
-                    children: [
-                      TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.example.demo_apk',
-                        tileProvider: kIsWeb
-                            ? CancellableNetworkTileProvider()
-                            : NetworkTileProvider(),
-                      ),
-                      MarkerLayer(
-                        markers: [
-                          // User's current location marker
-                          Marker(
-                            point: _currentPosition!,
-                            width: 60,
-                            height: 60,
-                            child: const Icon(
-                              Icons.location_pin,
-                              color: Colors.red,
-                              size: 40,
-                            ),
-                          ),
-                          // Nearby drivers markers
-                          ..._nearbyDrivers.map((driver) {
-                            return Marker(
-                              point: LatLng(
-                                driver['latitude'].toDouble(),
-                                driver['longitude'].toDouble(),
-                              ),
-                              width: 80,
-                              height: 80,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.green,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      driver['vehicle_number'] ?? 'N/A',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  const Icon(
-                                    Icons.local_taxi,
-                                    color: Colors.green,
-                                    size: 30,
-                                  ),
-                                ],
-                              ),
-                            );
-                          }),
-                        ],
-                      ),
-                    ],
-                  ),
+                UserMapWidget(
+                  currentPosition: _currentPosition!,
+                  nearbyDrivers: _nearbyDrivers,
                 ),
 
                 // Bottom part (inputs + button)
@@ -699,156 +543,22 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
                     child: Column(
                       children: [
                         // Nearby drivers info
-                        if (_nearbyDrivers.isNotEmpty) ...[
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.green[50],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.green[200]!),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.local_taxi,
-                                      color: Colors.green,
-                                      size: 18,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      '${_nearbyDrivers.length} E-Rickshaw${_nearbyDrivers.length > 1 ? 's' : ''} Nearby',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    if (_isLoadingDrivers) ...[
-                                      const SizedBox(
-                                        width: 12,
-                                        height: 12,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 1.5,
-                                          valueColor:
-                                              AlwaysStoppedAnimation<Color>(
-                                                Colors.green,
-                                              ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                ...(_nearbyDrivers
-                                    .take(2) // Reduced from 3 to 2
-                                    .map(
-                                      (driver) => Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 3,
-                                        ),
-                                        child: Text(
-                                          '${driver['username']} (${driver['vehicle_number']})',
-                                          style: const TextStyle(fontSize: 11),
-                                        ),
-                                      ),
-                                    )
-                                    .toList()),
-                                if (_nearbyDrivers.length > 2)
-                                  Text(
-                                    'and ${_nearbyDrivers.length - 2} more...',
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
+                        NearbyDriversInfo(
+                          nearbyDrivers: _nearbyDrivers,
+                          isLoading: _isLoadingDrivers,
+                        ),
+                        if (_nearbyDrivers.isNotEmpty)
                           const SizedBox(height: 10),
-                        ],
 
-                        TextField(
-                          controller: _pickupController,
-                          enabled: !_isLoading,
-                          decoration: const InputDecoration(
-                            labelText: 'Pickup Location',
-                            border: OutlineInputBorder(),
-                            prefixIcon: Icon(
-                              Icons.location_on,
-                              color: Colors.green,
-                            ),
-                            contentPadding: EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 12,
-                            ),
-                          ),
+                        // Ride request form
+                        RideRequestForm(
+                          pickupController: _pickupController,
+                          dropController: _dropController,
+                          passengerController: _passengerController,
+                          onSubmit: _createRideRequest,
+                          isLoading: _isLoading,
+                          enabled: true,
                         ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _dropController,
-                          enabled: !_isLoading,
-                          decoration: const InputDecoration(
-                            labelText: 'Drop Location',
-                            border: OutlineInputBorder(),
-                            prefixIcon: Icon(
-                              Icons.location_on,
-                              color: Colors.red,
-                            ),
-                            contentPadding: EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 12,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _passengerController,
-                          enabled: !_isLoading,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Number of Passengers',
-                            border: OutlineInputBorder(),
-                            prefixIcon: Icon(Icons.group, color: Colors.blue),
-                            contentPadding: EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 12,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 48,
-                          child: ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _createRideRequest,
-                            icon: _isLoading
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white,
-                                      ),
-                                    ),
-                                  )
-                                : const Icon(Icons.notification_important),
-                            label: Text(
-                              _isLoading
-                                  ? 'Creating Request...'
-                                  : 'Alert Nearby E-Rickshaw',
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _isLoading ? Colors.grey : null,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16), // Extra padding at bottom
                       ],
                     ),
                   ),

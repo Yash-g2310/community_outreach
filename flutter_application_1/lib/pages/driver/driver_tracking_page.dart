@@ -3,11 +3,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'driver_page.dart';
 import '../../config/api_endpoints.dart';
 import '../../services/websocket_service.dart';
+import '../../services/api_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
@@ -53,7 +53,8 @@ class RideTrackingPage extends StatefulWidget {
   State<RideTrackingPage> createState() => _RideTrackingPageState();
 }
 
-class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin {
+class _RideTrackingPageState extends State<RideTrackingPage>
+    with SafeStateMixin {
   LatLng? _currentPosition;
   String _rideStatus = 'accepted';
   bool _isLoading = false;
@@ -61,6 +62,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _wsSubscription;
   final ErrorService _errorService = ErrorService();
+  final ApiService _apiService = ApiService();
 
   // API Configuration uses centralized base URL from constants
 
@@ -140,7 +142,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
 
   // Location updates only, ride status handled by WebSocket
   void _startLocationUpdates() {
-    _locationTimer = Timer.periodic(TimerConstants.locationUpdateInterval, (timer) {
+    _locationTimer = Timer.periodic(TimerConstants.locationUpdateInterval, (
+      timer,
+    ) {
       _getCurrentLocation();
     });
   }
@@ -238,7 +242,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
           );
 
           Future.delayed(UIConstants.shortDelay, () {
-            if (mounted) Navigator.pop(context);
+            if (mounted) AppRouter.pop(context);
           });
           break;
 
@@ -254,11 +258,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
           } catch (_) {}
 
           if (!mounted) return;
-          Navigator.pushReplacement(
+          AppRouter.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => DriverPage(jwtToken: widget.accessToken),
-            ),
+            DriverPage(jwtToken: widget.accessToken),
           );
           break;
 
@@ -277,17 +279,13 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
   Future<void> _completeRide() async {
     if (widget.accessToken == null) return;
 
-        safeSetState(() {
+    safeSetState(() {
       _isLoading = true;
     });
 
     try {
-      final response = await http.post(
-        Uri.parse(RideHandlingEndpoints.complete(widget.rideId)),
-        headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
-          'Content-Type': 'application/json',
-        },
+      final response = await _apiService.post(
+        RideHandlingEndpoints.complete(widget.rideId),
       );
 
       if (!mounted) return;
@@ -368,7 +366,7 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
       return;
     }
 
-        safeSetState(() {
+    safeSetState(() {
       _isLoading = true;
     });
 
@@ -379,12 +377,8 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
         tag: 'DriverTracking',
       );
 
-      final response = await http.post(
-        Uri.parse(RideHandlingEndpoints.driverCancel(widget.rideId)),
-        headers: {
-          'Authorization': 'Bearer ${widget.accessToken}',
-          'Content-Type': 'application/json',
-        },
+      final response = await _apiService.post(
+        RideHandlingEndpoints.driverCancel(widget.rideId),
       );
 
       // 🧾 Log the raw response for debugging
@@ -450,7 +444,6 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
       }
     }
   }
-
 
   @override
   Widget build(BuildContext context) {

@@ -83,7 +83,7 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: ElevatedButton(
                         onPressed: () {
-                          Navigator.pushNamed(context, AppRouter.login);
+                          AppRouter.pushNamed(context, AppRouter.login);
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFF7A00),
@@ -109,7 +109,7 @@ class StepRewardPage extends StatelessWidget {
                       height: 55,
                       child: OutlinedButton(
                         onPressed: () {
-                          Navigator.pushNamed(context, AppRouter.signup);
+                          AppRouter.pushNamed(context, AppRouter.signup);
                         },
                         style: OutlinedButton.styleFrom(
                           side: const BorderSide(

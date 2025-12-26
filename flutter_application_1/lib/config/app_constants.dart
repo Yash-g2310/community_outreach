@@ -55,13 +55,13 @@ class UIConstants {
   static const Duration shortDelay = Duration(seconds: 2);
 
   /// SnackBar default display duration
-  static const Duration snackBarDuration = Duration(seconds: 4);
+  static const Duration snackBarDuration = Duration(seconds: 2);
 
   /// Success message display duration
-  static const Duration successMessageDuration = Duration(seconds: 3);
+  static const Duration successMessageDuration = Duration(seconds: 2);
 
   /// Error message display duration
-  static const Duration errorMessageDuration = Duration(seconds: 4);
+  static const Duration errorMessageDuration = Duration(seconds: 3);
 }
 
 /// Timer-related constants

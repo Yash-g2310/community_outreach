@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../../config/api_endpoints.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
+import '../../router/app_router.dart';
 
 class PreviousRidesPage extends StatefulWidget {
   final String jwtToken;
@@ -68,10 +69,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
         }
       }
     } catch (e) {
-      Logger.error(
-        'PreviousRides: exception: $e',
-        tag: 'PreviousRides',
-      );
+      Logger.error('PreviousRides: exception: $e', tag: 'PreviousRides');
       setState(() => isLoading = false);
       if (mounted) {
         _errorService.showError(context, 'Failed to load previous rides: $e');
@@ -130,7 +128,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => AppRouter.pop(context),
               child: const Text('Close', style: TextStyle(color: Colors.blue)),
             ),
           ],

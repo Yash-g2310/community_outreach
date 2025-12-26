@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../../models/profile_model.dart';
 import '../../services/profile_service.dart';
 import '../../services/error_service.dart';
+import '../../router/app_router.dart';
 
 /// Clean ProfilePage implementation. Use this instead of the legacy/merged `profile.dart`.
 class ProfilePage extends StatefulWidget {
@@ -118,7 +119,7 @@ class _ProfilePageState extends State<ProfilePage> {
           Row(
             children: [
               IconButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => AppRouter.pop(context),
                 icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
               ),
               Expanded(

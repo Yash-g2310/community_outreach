@@ -1,11 +1,11 @@
 import 'dart:ui';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'user_page.dart';
 import '../../config/api_endpoints.dart';
 import '../../config/app_constants.dart';
+import '../../services/api_service.dart';
 import '../../services/error_service.dart';
+import '../../router/app_router.dart';
 
 class RideLoadingPage extends StatefulWidget {
   final String? jwtToken;
@@ -35,6 +35,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
   late final Animation<double> _innerScale;
   late final Animation<double> _outerScale;
   final ErrorService _errorService = ErrorService();
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -205,17 +206,10 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                       onPressed: () async {
                         // Try to cancel the ride on the backend if we have a rideId
                         if (widget.rideId != null && widget.jwtToken != null) {
-                          final uri = Uri.parse(
-                            PassengerEndpoints.cancel(widget.rideId!),
-                          );
                           try {
-                            final resp = await http.post(
-                              uri,
-                              headers: {
-                                'Authorization': 'Bearer ${widget.jwtToken}',
-                                'Content-Type': 'application/json',
-                              },
-                              body: jsonEncode({'reason': 'Cancelled by user'}),
+                            final resp = await _apiService.post(
+                              PassengerEndpoints.cancel(widget.rideId!),
+                              body: {'reason': 'Cancelled by user'},
                             );
 
                             if (resp.statusCode >= 200 &&
@@ -227,32 +221,28 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                               );
                             } else {
                               if (!mounted) return;
-                              _errorService.showError(
+                              _errorService.handleError(
                                 context,
-                                'Failed to cancel ride (${resp.statusCode})',
+                                null,
+                                response: resp,
                               );
                             }
                           } catch (e) {
                             if (!mounted) return;
-                            _errorService.showError(
-                              context,
-                              'Network error while cancelling',
-                            );
+                            _errorService.handleError(context, e);
                           }
                         }
                         // Navigate back to user map regardless
                         if (!mounted) return;
 
-                        Navigator.pushReplacement(
+                        AppRouter.pushReplacement(
                           context,
-                          MaterialPageRoute(
-                            builder: (context) => UserMapScreen(
-                              jwtToken: widget.jwtToken,
-                              sessionId: widget.sessionId,
-                              csrfToken: widget.csrfToken,
-                              refreshToken: widget.refreshToken,
-                              userData: widget.userData,
-                            ),
+                          UserMapScreen(
+                            jwtToken: widget.jwtToken,
+                            sessionId: widget.sessionId,
+                            csrfToken: widget.csrfToken,
+                            refreshToken: widget.refreshToken,
+                            userData: widget.userData,
                           ),
                         );
                       },
