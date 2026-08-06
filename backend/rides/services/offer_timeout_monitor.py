@@ -7,7 +7,7 @@ from typing import Optional
 
 from django.conf import settings
 
-from .services.offer_timeout import process_offer_timeouts
+from .offer_timeout import process_offer_timeouts
 
 logger = logging.getLogger(__name__)
 

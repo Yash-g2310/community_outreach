@@ -7,9 +7,9 @@ from channels.layers import get_channel_layer
 from django.utils import timezone
 import logging
 
-from .models import DriverProfile, RideOffer, RideRequest
-from .serializers import RideRequestSerializer
-from .utils import calculate_distance
+from ..models import DriverProfile, RideOffer, RideRequest
+from ..api.serializers import RideRequestSerializer
+from ..common.utils import calculate_distance
 
 logger = logging.getLogger(__name__)
 

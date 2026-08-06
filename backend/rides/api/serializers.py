@@ -3,7 +3,7 @@
 """
 
 from rest_framework import serializers
-from .models import User, DriverProfile, RideRequest
+from ..models import User, DriverProfile, RideRequest
 
 
 class UserSerializer(serializers.ModelSerializer):

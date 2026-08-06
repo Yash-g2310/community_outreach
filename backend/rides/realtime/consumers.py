@@ -6,8 +6,8 @@ from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
-from .models import DriverProfile
-from .utils import calculate_distance
+from ..models import DriverProfile
+from ..common.utils import calculate_distance
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 User = get_user_model()

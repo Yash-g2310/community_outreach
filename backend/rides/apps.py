@@ -8,6 +8,6 @@ class RidesConfig(AppConfig):
     name = 'rides'
 
     def ready(self):
-        from .offer_timeout_monitor import start_offer_timeout_monitor
+        from .services.offer_timeout_monitor import start_offer_timeout_monitor
 
         start_offer_timeout_monitor()

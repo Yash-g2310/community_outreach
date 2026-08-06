@@ -5,7 +5,7 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from rides.models import RideOffer
-from rides.notifications import expire_offer_and_dispatch
+from rides.realtime.notifications import expire_offer_and_dispatch
 
 
 def process_offer_timeouts(timeout_seconds: int = 10) -> Tuple[int, int]:

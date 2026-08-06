@@ -194,6 +194,6 @@ LOGGING = {
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'INFO'},
     'loggers': {
-        'rides.notifications': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
+        'rides.realtime.notifications': {'handlers': ['console'], 'level': 'DEBUG', 'propagate': False},
     },
 }

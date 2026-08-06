@@ -6,20 +6,20 @@ from django.utils import timezone
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
-from .consumers import notify_nearby_passengers_sync
-from .models import DriverProfile, RideRequest
+from ..realtime.consumers import notify_nearby_passengers_sync
+from ..models import DriverProfile, RideRequest
 from .serializers import (
     UserSerializer, DriverProfileSerializer, RideRequestSerializer,
     RideRequestCreateSerializer, LocationUpdateSerializer,
     DriverStatusSerializer, RideCancelSerializer
 )
-from .notifications import (
+from ..realtime.notifications import (
     build_offers_for_ride,
     dispatch_next_offer,
     notify_driver_event,
     notify_passenger_event
 )
-from .utils import calculate_distance
+from ..common.utils import calculate_distance
 
 
 @api_view(['GET', 'POST', 'PUT', 'PATCH'])

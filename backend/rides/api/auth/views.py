@@ -6,8 +6,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate, login as django_login
 from django.middleware.csrf import get_token
-from .auth_serializers import LoginSerializer, RegisterSerializer
-from .serializers import UserSerializer
+from .serializers import LoginSerializer, RegisterSerializer
+from ..serializers import UserSerializer
 
 
 class RegisterView(APIView):

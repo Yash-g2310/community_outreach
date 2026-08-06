@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from rides.auth_views import (
+from rides.api.auth.views import (
     RegisterView,
     LoginView,
     RefreshTokenView
@@ -17,7 +17,7 @@ urlpatterns = [
     path('api/auth/refresh/', RefreshTokenView.as_view(), name='refresh-token'),
     
     # Rides endpoints (at /api/rides/)
-    path('api/rides/', include('rides.urls')),      # rides.urls have all the actual ride-related endpoints
+    path('api/rides/', include('rides.api.urls')),
 ]
 
 # Serve media files in development
