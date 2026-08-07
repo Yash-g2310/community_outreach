@@ -376,17 +376,17 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   }
 
   // Show logout confirmation dialog
-  void _showLogoutDialog(BuildContext context) {
+  void _showLogoutDialog(BuildContext pageContext) {
     showDialog(
-      context: context,
-      builder: (BuildContext context) {
+      context: pageContext,
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Logout'),
           content: const Text('Are you sure you want to logout?'),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop(); // Close dialog
+                Navigator.of(dialogContext).pop(); // Close dialog
               },
               child: const Text('Cancel'),
             ),
@@ -394,17 +394,15 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
               onPressed: () async {
                 Logger.info('User Logged out', tag: 'UserPage');
 
-                Navigator.of(context).pop(); // Close dialog
+                Navigator.of(dialogContext).pop(); // Close dialog
 
-                // Navigate back to login page and clear all previous routes
-                // Clear auth data and navigate to splash
                 await AuthService().clearAuthData();
-                if (context.mounted) {
-                  Navigator.of(context).pushNamedAndRemoveUntil(
-                    AppRouter.splash,
-                    (Route<dynamic> route) => false,
-                  );
-                }
+                if (!mounted) return;
+
+                Navigator.of(this.context).pushNamedAndRemoveUntil(
+                  AppRouter.login,
+                  (Route<dynamic> route) => false,
+                );
               },
               child: const Text('Logout', style: TextStyle(color: Colors.red)),
             ),

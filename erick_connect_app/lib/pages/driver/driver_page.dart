@@ -487,26 +487,25 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
             // Show confirmation dialog
             showDialog(
               context: context,
-              builder: (context) => AlertDialog(
+              builder: (dialogContext) => AlertDialog(
                 title: const Text('Logout'),
                 content: const Text('Are you sure you want to logout?'),
                 actions: [
                   TextButton(
-                    onPressed: () => AppRouter.pop(context),
+                    onPressed: () => AppRouter.pop(dialogContext),
                     child: const Text('Cancel'),
                   ),
                   TextButton(
                     onPressed: () async {
-                      AppRouter.pop(context); // Close dialog
-                      // Clear auth data and navigate to splash
+                      AppRouter.pop(dialogContext); // Close dialog
                       await AuthService().clearAuthData();
-                      if (context.mounted) {
-                        AppRouter.pushNamedAndRemoveUntil(
-                          context,
-                          AppRouter.splash,
-                          (route) => false,
-                        );
-                      }
+                      if (!mounted) return;
+
+                      AppRouter.pushNamedAndRemoveUntil(
+                        this.context,
+                        AppRouter.login,
+                        (route) => false,
+                      );
                     },
                     child: const Text(
                       'Logout',
