@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'dart:async';
 import 'package:latlong2/latlong.dart';
 import '../profile/profile_page.dart';
 import 'driver_tracking_page.dart';
@@ -33,7 +32,6 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   String? errorMessage;
   Map<String, dynamic>? driverProfile;
   LatLng? _mapPosition; // For displaying on map
-  int? _currentRideId;
 
   // API Configuration uses centralized base URL from constants
 
@@ -58,9 +56,6 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     // Dispose controllers
     _wsController.dispose();
     _locationController.dispose();
-
-    // Ensure server marks driver offline when the app/widget is disposed
-    _sendDriverOfflineSilently();
 
     super.dispose();
   }
@@ -119,7 +114,6 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
 
   void _startLocationUpdates() {
     _locationController.setActive(isActive);
-    _locationController.setCurrentRideId(_currentRideId);
     _locationController.startLocationUpdates(
       isActive: isActive,
       onLocationUpdate: (LatLng location) {
@@ -148,20 +142,13 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
           data,
           onRideOffer: _handleIncomingRide,
           onRideRemoval: _handleRideRemoval,
-          onCurrentRideCleared: (rideId) {
-            _currentRideId = null;
-            _locationController.setCurrentRideId(null);
-          },
-          isActive: isActive,
-          stopLocationUpdates: _stopLocationUpdates,
-          startLocationUpdates: _startLocationUpdates,
         );
       },
     );
   }
 
   void _handleIncomingRide(Map<String, dynamic> ridePayload) async {
-    final rideId = ridePayload['id'];
+    final rideId = (ridePayload['ride_id'] ?? ridePayload['id'])?.toString();
     if (rideId == null) return;
 
     // Check if previously rejected
@@ -182,7 +169,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
       safeSetState(() {
         final updated = List<Map<String, dynamic>>.from(notifications);
         final existingIndex = updated.indexWhere(
-          (notif) => notif['id'] == rideId,
+          (notif) => notif['id']?.toString() == rideId,
         );
         if (existingIndex >= 0) {
           updated[existingIndex] = mappedRide;
@@ -197,13 +184,13 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   }
 
   void _handleRideRemoval(dynamic rideIdRaw, String reason) {
-    final rideId = rideIdRaw is int ? rideIdRaw : int.tryParse('$rideIdRaw');
-    if (rideId == null) return;
+    final rideId = rideIdRaw.toString();
+    if (rideId.isEmpty) return;
 
     var removed = false;
     safeSetState(() {
       final updated = notifications
-          .where((notif) => notif['id'] != rideId)
+          .where((notif) => notif['id']?.toString() != rideId)
           .toList();
       removed = updated.length != notifications.length;
       notifications = updated;
@@ -212,6 +199,14 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     if (removed) {
       _errorService.showSuccess(context, reason);
     }
+  }
+
+  Future<void> _loadPendingRideRequests() async {
+    final pending = await _wsController.rideController.fetchPendingRideRequests();
+    if (!mounted) return;
+    safeSetState(() {
+      notifications = pending;
+    });
   }
 
   Future<void> _loadDriverData() async {
@@ -235,6 +230,12 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
       // Connect WebSocket first before starting location updates
       await _connectDriverSocket();
 
+      if (await _restoreActiveRide()) return;
+
+      if (isActive) {
+        await _loadPendingRideRequests();
+      }
+
       // Start location updates if driver is active (after WebSocket is connected)
       if (isActive) {
         _startLocationUpdates();
@@ -250,16 +251,44 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     }
   }
 
+  /// The FastAPI lifecycle is authoritative, so a restarted driver app can
+  /// return directly to its accepted/active ride without local state.
+  Future<bool> _restoreActiveRide() async {
+    try {
+      final response = await _apiService.get(RideEndpoints.active);
+      if (response.statusCode != 200 || response.body == 'null') return false;
+      final data = Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+      if (data['participant_role']?.toString() != 'driver') return false;
+      final rideId = data['id']?.toString();
+      if (rideId == null || rideId.isEmpty || !mounted) return false;
+      AppRouter.pushReplacement(
+        context,
+        RideTrackingPage(
+          rideId: rideId,
+          pickupAddress: data['pickup_address']?.toString() ?? 'Pickup location',
+          dropoffAddress: data['dropoff_address']?.toString() ?? 'Destination not provided',
+          passengerCount: (data['passenger_count'] as num?)?.toInt() ?? 1,
+          pickupLatitude: double.tryParse(data['pickup_latitude']?.toString() ?? ''),
+          pickupLongitude: double.tryParse(data['pickup_longitude']?.toString() ?? ''),
+        ),
+      );
+      return true;
+    } catch (error) {
+      Logger.warning('Unable to recover an active driver ride: $error', tag: 'DriverPage');
+      return false;
+    }
+  }
+
   Future<void> _fetchDriverProfile() async {
     try {
-      final response = await _apiService.get(DriverEndpoints.profile);
+      final response = await _apiService.get(AuthEndpoints.profile);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         safeSetState(() {
           driverProfile = data;
           // Update isActive based on driver status
-          isActive = data['status'] == 'available';
+          isActive = data['availability_status'] == 'available';
         });
       } else {
         throw Exception(
@@ -292,15 +321,19 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
       double? latitude = location?.latitude;
       double? longitude = location?.longitude;
 
-      final response = await _apiService.patch(
-        DriverEndpoints.status,
-        body: {
-          'status': active ? 'available' : 'offline',
-          if (latitude != null && longitude != null) ...{
-            'current_latitude': double.parse(latitude.toStringAsFixed(6)),
-            'current_longitude': double.parse(longitude.toStringAsFixed(6)),
-          },
-        },
+      if (active && (latitude == null || longitude == null)) {
+        throw Exception('A current location is required before going online');
+      }
+      final response = await _apiService.post(
+        active
+            ? DriverAvailabilityEndpoints.online
+            : DriverAvailabilityEndpoints.offline,
+        body: active
+            ? {
+                'latitude': double.parse(latitude!.toStringAsFixed(6)),
+                'longitude': double.parse(longitude!.toStringAsFixed(6)),
+              }
+            : null,
       );
 
       if (!mounted) return;
@@ -313,7 +346,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
         // Start or stop location updates based on status
         if (active) {
           _startLocationUpdates();
-          // No need to fetch nearby rides when going online; ride requests come via WebSocket.
+          await _loadPendingRideRequests();
         } else {
           _stopLocationUpdates();
           // Clear notifications when going offline
@@ -342,7 +375,8 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     final token = await _authService.getAccessToken();
     if (token == null || token.isEmpty) return;
 
-    final rideId = notification['id'] as int;
+    final rideId = notification['id']?.toString();
+    if (rideId == null || rideId.isEmpty) return;
     safeSetState(() => isLoading = true);
 
     try {
@@ -351,39 +385,27 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
 
       if (success) {
         safeSetState(() {
-          notifications.removeWhere((notif) => notif['id'] == rideId);
+          notifications = [];
         });
+
+        AppRouter.pushReplacement(
+          context,
+          RideTrackingPage(
+            rideId: rideId,
+            pickupAddress:
+                notification['start']?.toString() ?? 'Pickup location',
+            dropoffAddress:
+                notification['end']?.toString() ?? 'Destination not provided',
+            passengerCount: (notification['people'] as num?)?.toInt() ?? 1,
+            pickupLatitude:
+                double.tryParse(notification['pickup_lat']?.toString() ?? ''),
+            pickupLongitude:
+                double.tryParse(notification['pickup_lng']?.toString() ?? ''),
+          ),
+        );
 
         _errorService.showSuccess(context, 'Ride accepted successfully! ✅');
 
-        _currentRideId = rideId;
-        _locationController.setCurrentRideId(rideId);
-
-        if (mounted) {
-          AppRouter.pushReplacement(
-            context,
-            RideTrackingPage(
-              rideId: notification['id'] as int,
-              pickupAddress: notification['start'] as String,
-              dropoffAddress: notification['end'] as String,
-              numberOfPassengers: notification['people'] as int,
-              passengerName: notification['passenger_name'] as String?,
-              passengerPhone: notification['passenger_phone'] as String?,
-              pickupLat: notification['pickup_lat'] != null
-                  ? double.tryParse(notification['pickup_lat'].toString())
-                  : null,
-              pickupLng: notification['pickup_lng'] != null
-                  ? double.tryParse(notification['pickup_lng'].toString())
-                  : null,
-              dropoffLat: notification['dropoff_lat'] != null
-                  ? double.tryParse(notification['dropoff_lat'].toString())
-                  : null,
-              dropoffLng: notification['dropoff_lng'] != null
-                  ? double.tryParse(notification['dropoff_lng'].toString())
-                  : null,
-            ),
-          );
-        }
       } else {
         _errorService.showError(context, 'Failed to accept ride');
       }
@@ -394,21 +416,16 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
     }
   }
 
-  Future<void> _rejectRide(int rideId) async {
-    final userData = await _authService.getUserData();
-    final driverId = userData?['id']?.toString() ?? 'unknown';
+  Future<void> _rejectRide(String rideId) async {
     safeSetState(() => isLoading = true);
 
     try {
-      final success = await _wsController.rideController.rejectRide(
-        rideId,
-        driverId,
-      );
+      final success = await _wsController.rideController.declineRide(rideId);
       if (!mounted) return;
 
       if (success) {
         safeSetState(() {
-          notifications.removeWhere((notif) => notif['id'] == rideId);
+          notifications.removeWhere((notif) => notif['id']?.toString() == rideId);
         });
         _errorService.showSuccess(
           context,
@@ -421,24 +438,6 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
       _errorService.handleError(context, e);
     } finally {
       safeSetState(() => isLoading = false);
-    }
-  }
-
-  Future<void> _sendDriverOfflineSilently() async {
-    final token = await _authService.getAccessToken();
-    if (token == null || token.isEmpty) return;
-
-    try {
-      await _apiService.patch(
-        DriverEndpoints.status,
-        body: {'status': 'offline'},
-      );
-    } catch (e) {
-      Logger.error(
-        'Error sending offline status on dispose',
-        error: e,
-        tag: 'DriverPage',
-      );
     }
   }
 
@@ -476,7 +475,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
       notification: notif,
       isLoading: isLoading,
       onAccept: () => _acceptRide(notif),
-      onReject: () => _rejectRide(notif['id'] as int),
+      onReject: () => _rejectRide(notif['id']?.toString() ?? ''),
     );
   }
 
@@ -579,7 +578,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
                           isLoading: isLoading,
                           errorMessage: errorMessage,
                           onRetry: _loadDriverData,
-                          onRefresh: _loadDriverData,
+                          onRefresh: _loadPendingRideRequests,
                           onNotificationTap: _showBottomSheet,
                         ),
 

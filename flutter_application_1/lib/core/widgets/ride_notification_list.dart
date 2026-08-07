@@ -208,31 +208,20 @@ class RideNotificationList extends StatelessWidget {
           (notif) => Card(
             margin: const EdgeInsets.only(bottom: 8),
             child: ListTile(
-              leading: CircleAvatar(
+              leading: const CircleAvatar(
                 backgroundColor: Colors.blue,
-                child: Text(
-                  '#${notif['id']}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                child: Icon(Icons.local_taxi, color: Colors.white),
               ),
-              title: Text(
-                notif['passenger_name'] ?? 'Unknown',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                ),
+              title: const Text(
+                'New ride request',
+                style: TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('From: ${notif['start']}'),
                   Text('To: ${notif['end']}'),
-                  Text(
-                    'Passengers: ${notif['people']} • ${notif['distance']}m away',
-                  ),
+                  Text('Passengers: ${notif['people']}'),
                 ],
               ),
               trailing: Container(

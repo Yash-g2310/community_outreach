@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'dart:typed_data';
 
 import '../../models/profile_model.dart';
 import '../../services/profile_service.dart';
-import '../../services/error_service.dart';
 import '../../router/app_router.dart';
 
 /// Clean ProfilePage implementation. Use this instead of the legacy/merged `profile.dart`.
@@ -28,12 +25,9 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final ProfileService _service = ProfileService();
-  final ImagePicker _picker = ImagePicker();
-  final ErrorService _errorService = ErrorService();
 
   late final bool _isDriver;
   late Future<Profile> _profileFuture;
-  bool _isUploading = false;
 
   @override
   void initState() {
@@ -54,52 +48,6 @@ class _ProfilePageState extends State<ProfilePage> {
       role: _isDriver ? 'Driver' : 'User',
       vehicleNumber: null,
     );
-  }
-
-  Future<void> _uploadProfilePicture() async {
-    if (widget.accessToken == null || widget.accessToken!.isEmpty) {
-      if (mounted) {
-        _errorService.showError(
-          context,
-          'Please login to upload profile picture',
-        );
-      }
-      return;
-    }
-
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 512,
-        maxHeight: 512,
-        imageQuality: 85,
-      );
-      if (image == null) return;
-      final Uint8List bytes = await image.readAsBytes();
-      final String filename = image.name.isNotEmpty
-          ? image.name
-          : 'profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-      setState(() => _isUploading = true);
-      await _service.uploadProfilePicture(widget.accessToken!, bytes, filename);
-
-      if (mounted) {
-        _errorService.showSuccess(
-          context,
-          'Profile picture updated successfully!',
-        );
-      }
-
-      setState(() {
-        _profileFuture = _loadProfile();
-        _isUploading = false;
-      });
-    } catch (e) {
-      setState(() => _isUploading = false);
-      if (mounted) {
-        _errorService.showError(context, 'Upload error: ${e.toString()}');
-      }
-    }
   }
 
   Widget _buildHeader(Profile p) {
@@ -139,49 +87,19 @@ class _ProfilePageState extends State<ProfilePage> {
             ],
           ),
           const SizedBox(height: 10),
-          Stack(
-            children: [
-              CircleAvatar(
-                radius: 45,
-                backgroundColor: Colors.white.withValues(alpha: 0.3),
-                child: _isUploading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : (p.profilePictureUrl != null
-                          ? ClipOval(
-                              child: Image.network(
-                                p.profilePictureUrl!,
-                                width: 90,
-                                height: 90,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.person,
-                              size: 50,
-                              color: Colors.white,
-                            )),
-              ),
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: _isUploading ? null : _uploadProfilePicture,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.cyan, width: 2),
+          CircleAvatar(
+            radius: 45,
+            backgroundColor: Colors.white.withValues(alpha: 0.3),
+            child: p.profilePictureUrl != null
+                ? ClipOval(
+                    child: Image.network(
+                      p.profilePictureUrl!,
+                      width: 90,
+                      height: 90,
+                      fit: BoxFit.cover,
                     ),
-                    child: const Icon(
-                      Icons.camera_alt,
-                      size: 16,
-                      color: Colors.cyan,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+                  )
+                : const Icon(Icons.person, size: 50, color: Colors.white),
           ),
           const SizedBox(height: 10),
           Text(

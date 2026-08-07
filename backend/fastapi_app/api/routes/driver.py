@@ -19,8 +19,9 @@ from fastapi_app.core.geo import geography_point
 from fastapi_app.core.redis import DRIVER_GEO_INDEX_KEY, driver_state_key, get_redis
 from fastapi_app.db.models.driver import DriverProfile
 from fastapi_app.db.models.identity import User
-from fastapi_app.db.models.ride import Ride, RideRequestRecipient, RideStatusHistory
+from fastapi_app.db.models.ride import Ride, RideParticipantLocation, RideRequestRecipient
 from fastapi_app.db.session import get_db_session
+from fastapi_app.services.ride_state import transition_ride
 
 router = APIRouter(prefix="/driver", tags=["driver availability"])
 
@@ -55,6 +56,11 @@ class AcceptedRideResponse(BaseModel):
     ride_id: UUID
     status: str
     channel: str
+
+
+class DeclinedRideResponse(BaseModel):
+    ride_id: UUID
+    response_status: str
 
 
 def _unavailable_redis_error() -> HTTPException:
@@ -251,13 +257,14 @@ async def accept_ride_request(
             )
             .values(response_status="expired", responded_at=now)
         )
-        ride.status = "expired"
-        session.add(
-            RideStatusHistory(
-                ride_id=ride.id,
-                status="expired",
-                reason="No driver accepted before the search timeout.",
-            )
+        await transition_ride(
+            session,
+            ride,
+            to_status="expired",
+            actor_role="system",
+            actor_id=None,
+            reason="No driver accepted before the search timeout.",
+            now=now,
         )
         await session.commit()
         await connections.send_to_user(ride.rider_id, {"type": "ride_request_expired", "ride_id": str(ride.id)})
@@ -287,9 +294,7 @@ async def accept_ride_request(
             )
         )
     )
-    ride.status = "accepted"
     ride.accepted_driver_id = profile.user_id
-    ride.accepted_at = now
     recipient.response_status = "accepted"
     recipient.responded_at = now
     profile.availability_status = "busy"
@@ -302,8 +307,46 @@ async def accept_ride_request(
         )
         .values(response_status="expired", responded_at=now)
     )
-    session.add(RideStatusHistory(ride_id=ride.id, status="accepted", changed_by_user_id=profile.user_id))
+    await transition_ride(
+        session,
+        ride,
+        to_status="accepted",
+        actor_role="driver",
+        actor_id=profile.user_id,
+        now=now,
+    )
+    # The rider receives a usable initial driver pin immediately after accepting,
+    # before the driver's next streamed GPS update arrives.
+    if profile.current_location is not None:
+        session.add(
+            RideParticipantLocation(
+                ride_id=ride.id,
+                participant_role="driver",
+                location=profile.current_location,
+                captured_at=profile.location_updated_at or now,
+                received_at=now,
+                sequence=1,
+            )
+        )
     await session.flush()
+
+    driver_location = None
+    location_geometry = cast(DriverProfile.current_location, Geometry(geometry_type="POINT", srid=4326))
+    location_row = (
+        await session.execute(
+            select(
+                func.ST_Y(location_geometry).label("latitude"),
+                func.ST_X(location_geometry).label("longitude"),
+            ).where(DriverProfile.user_id == profile.user_id)
+        )
+    ).one_or_none()
+    if location_row is not None and location_row.latitude is not None and location_row.longitude is not None:
+        driver_location = {
+            "latitude": float(location_row.latitude),
+            "longitude": float(location_row.longitude),
+            "timestamp": (profile.location_updated_at or now).isoformat(),
+            "sequence": 1,
+        }
 
     state_key = driver_state_key(str(profile.user_id))
     try:
@@ -334,6 +377,9 @@ async def accept_ride_request(
             "ride_id": str(ride.id),
             "channel": channel,
             "driver_id": str(profile.user_id),
+            "status": ride.status,
+            "state_version": ride.state_version,
+            "driver_location": driver_location,
         },
     )
     for other_driver_id in other_driver_ids:
@@ -346,3 +392,39 @@ async def accept_ride_request(
             },
         )
     return AcceptedRideResponse(ride_id=ride.id, status=ride.status, channel=channel)
+
+
+@router.post("/ride-requests/{ride_id}/decline", response_model=DeclinedRideResponse)
+async def decline_ride_request(
+    ride_id: UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> DeclinedRideResponse:
+    """Record that the addressed driver declined a still-searching request.
+
+    Declining affects only this driver's recipient row.  The rider's request
+    remains available to every other pending nearby driver until one accepts or
+    the normal search expiry process closes it.
+    """
+
+    _, profile = await _current_driver(request, session, lock=True)
+    ride = await session.scalar(select(Ride).where(Ride.id == ride_id).with_for_update())
+    if ride is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride request was not found")
+
+    recipient = await session.scalar(
+        select(RideRequestRecipient)
+        .where(RideRequestRecipient.ride_id == ride.id, RideRequestRecipient.driver_id == profile.user_id)
+        .with_for_update()
+    )
+    if recipient is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This ride request was not sent to you")
+    if recipient.response_status == "declined":
+        return DeclinedRideResponse(ride_id=ride.id, response_status=recipient.response_status)
+    if ride.status != "searching" or recipient.response_status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ride request is no longer available")
+
+    recipient.response_status = "declined"
+    recipient.responded_at = datetime.now(timezone.utc)
+    await session.commit()
+    return DeclinedRideResponse(ride_id=ride.id, response_status=recipient.response_status)

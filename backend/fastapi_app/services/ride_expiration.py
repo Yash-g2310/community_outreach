@@ -8,8 +8,9 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 
-from fastapi_app.db.models.ride import Ride, RideRequestRecipient, RideStatusHistory
+from fastapi_app.db.models.ride import Ride, RideRequestRecipient
 from fastapi_app.db.session import get_session_factory
+from fastapi_app.services.ride_state import transition_ride
 
 
 @dataclass(frozen=True)
@@ -49,14 +50,14 @@ async def expire_due_ride_requests() -> list[ExpiredRide]:
                 )
                 .values(response_status="expired", responded_at=now)
             )
-            ride.status = "expired"
-            session.add(
-                RideStatusHistory(
-                    ride_id=ride.id,
-                    status="expired",
-                    changed_by_user_id=None,
-                    reason="No driver accepted before the search timeout.",
-                )
+            await transition_ride(
+                session,
+                ride,
+                to_status="expired",
+                actor_role="system",
+                actor_id=None,
+                reason="No driver accepted before the search timeout.",
+                now=now,
             )
             expired.append(ExpiredRide(ride_id=ride.id, rider_id=ride.rider_id, driver_ids=driver_ids))
         await session.commit()

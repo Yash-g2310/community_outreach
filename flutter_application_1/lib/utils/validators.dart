@@ -96,6 +96,18 @@ String? validateUsername(String? value) {
   return null;
 }
 
+/// Validates the phone number or email used to sign in to the FastAPI backend.
+String? validateLoginIdentifier(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return 'Phone number or email is required';
+  }
+  final identifier = value.trim();
+  if (_emailRegex.hasMatch(identifier) || _phoneRegex.hasMatch(identifier)) {
+    return null;
+  }
+  return 'Enter a valid phone number or email address';
+}
+
 /// Validates required field
 String? validateRequired(String? value, {String fieldName = 'This field'}) {
   if (value == null || value.trim().isEmpty) {

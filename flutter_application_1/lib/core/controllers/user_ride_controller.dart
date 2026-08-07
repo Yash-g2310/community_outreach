@@ -8,6 +8,43 @@ import '../../config/api_endpoints.dart';
 class UserRideController {
   final ApiService _apiService = ApiService();
 
+  /// Read nearby available driver pins from the FastAPI Redis-backed endpoint.
+  /// Driver identities and vehicle details are intentionally not returned until
+  /// a ride is accepted.
+  Future<List<Map<String, dynamic>>> fetchNearbyDrivers(
+    LatLng currentPosition,
+  ) async {
+    final latitude = _truncateCoordinate(currentPosition.latitude);
+    final longitude = _truncateCoordinate(currentPosition.longitude);
+    final endpoint =
+        '${RiderEndpoints.nearbyDrivers}?latitude=$latitude&longitude=$longitude&radius_meters=1500';
+
+    try {
+      final response = await _apiService.get(endpoint);
+      if (response.statusCode != 200) {
+        Logger.warning(
+          'Failed to load nearby drivers: ${response.statusCode}',
+          tag: 'UserRideController',
+        );
+        return const [];
+      }
+
+      final decoded = json.decode(response.body) as Map<String, dynamic>;
+      final drivers = decoded['drivers'] as List<dynamic>? ?? const [];
+      return drivers
+          .whereType<Map>()
+          .map((driver) => Map<String, dynamic>.from(driver))
+          .toList();
+    } catch (error) {
+      Logger.error(
+        'Error loading nearby drivers',
+        error: error,
+        tag: 'UserRideController',
+      );
+      return const [];
+    }
+  }
+
   /// Create a ride request
   Future<Map<String, dynamic>?> createRideRequest({
     required LatLng currentPosition,
@@ -30,7 +67,7 @@ class UserRideController {
       );
 
       final response = await _apiService.post(
-        PassengerEndpoints.request,
+        RiderEndpoints.requestRide,
         body: rideData,
       );
 

@@ -59,6 +59,66 @@ class WebSocketService {
   /// Check if driver socket is connected
   bool get isDriverConnected => _driverConnected && _driverSocket != null;
 
+  /// Reconnect any active socket with a rotated FastAPI access token.
+  ///
+  /// FastAPI validates each incoming live-location write, so keeping a socket
+  /// open with an expired access token would otherwise make tracking fail after
+  /// the normal access-token lifetime.
+  Future<void> reconnectWithAccessToken(String accessToken) async {
+    final reconnectPassenger = _passengerSocket != null || _passengerConnected;
+    final reconnectDriver = _driverSocket != null || _driverConnected;
+    final passengerSessionId = _passengerSessionId;
+    final passengerCsrfToken = _passengerCsrfToken;
+    final driverSessionId = _driverSessionId;
+    final driverCsrfToken = _driverCsrfToken;
+
+    _passengerJwtToken = accessToken;
+    _driverJwtToken = accessToken;
+
+    if (reconnectPassenger) {
+      await _replacePassengerSocket();
+      await connectPassenger(
+        jwtToken: accessToken,
+        sessionId: passengerSessionId,
+        csrfToken: passengerCsrfToken,
+      );
+    }
+    if (reconnectDriver) {
+      await _replaceDriverSocket();
+      await connectDriver(
+        jwtToken: accessToken,
+        sessionId: driverSessionId,
+        csrfToken: driverCsrfToken,
+      );
+    }
+  }
+
+  Future<void> _replacePassengerSocket() async {
+    _passengerReconnectTimer?.cancel();
+    _passengerReconnectTimer = null;
+    await _passengerSubscription?.cancel();
+    _passengerSubscription = null;
+    final socket = _passengerSocket;
+    if (socket != null) {
+      await socket.sink.close();
+    }
+    _passengerSocket = null;
+    _passengerConnected = false;
+  }
+
+  Future<void> _replaceDriverSocket() async {
+    _driverReconnectTimer?.cancel();
+    _driverReconnectTimer = null;
+    await _driverSubscription?.cancel();
+    _driverSubscription = null;
+    final socket = _driverSocket;
+    if (socket != null) {
+      await socket.sink.close();
+    }
+    _driverSocket = null;
+    _driverConnected = false;
+  }
+
   /// Connect passenger WebSocket
   Future<void> connectPassenger({
     required String? jwtToken,

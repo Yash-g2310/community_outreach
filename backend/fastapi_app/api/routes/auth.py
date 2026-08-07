@@ -219,6 +219,32 @@ async def current_user(request: Request, session: AsyncSession = Depends(get_db_
     return {"user": _user_response(user, list(claims["roles"]))}  # type: ignore[arg-type]
 
 
+@router.get("/profile")
+async def account_profile(request: Request, session: AsyncSession = Depends(get_db_session)) -> dict[str, object]:
+    """Return the signed-in account profile, including driver-only fields when applicable.
+
+    This is intentionally read-only.  Profile-image upload/storage is not part of
+    the current single-server ride-matching MVP.
+    """
+
+    from fastapi_app.api.routes.websocket import get_authenticated_claims
+
+    claims = await get_authenticated_claims(request, session)
+    user_id = UUID(str(claims["sub"]))
+    roles = list(claims["roles"])
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User was not found")
+
+    response = _user_response(user, roles)
+    if "driver" in roles:
+        profile = await session.get(DriverProfile, user_id)
+        if profile is not None:
+            response["vehicle_number"] = profile.vehicle_license_number
+            response["availability_status"] = profile.availability_status
+    return response
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request, session: AsyncSession = Depends(get_db_session)) -> None:
     """Revoke the current refresh session; its access token remains valid only briefly."""

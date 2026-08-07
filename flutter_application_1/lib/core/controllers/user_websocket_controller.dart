@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:latlong2/latlong.dart';
 import '../../services/websocket_service.dart';
 import '../../services/logger_service.dart';
 
@@ -14,7 +13,6 @@ class UserWebSocketController {
     required String? jwtToken,
     String? sessionId,
     String? csrfToken,
-    LatLng? currentPosition,
     required Function(Map<String, dynamic>) onMessage,
   }) async {
     try {
@@ -36,25 +34,6 @@ class UserWebSocketController {
         Logger.websocket("WS RAW → $data", tag: 'UserWebSocketController');
         onMessage(data);
       });
-
-      // Subscribe to nearby drivers if we have current position
-      if (currentPosition != null) {
-        _wsService.sendPassengerMessage({
-          "type": "subscribe_nearby",
-          "latitude": currentPosition.latitude,
-          "longitude": currentPosition.longitude,
-          "radius": 1500,
-        });
-        Logger.websocket(
-          "Sent Websocket for Nearby Drivers to backend",
-          tag: 'UserWebSocketController',
-        );
-      } else {
-        Logger.warning(
-          "Cannot subscribe_nearby — currentPosition is null",
-          tag: 'UserWebSocketController',
-        );
-      }
 
       Logger.websocket(
         'Passenger WebSocket connected via controller',

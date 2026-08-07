@@ -9,7 +9,7 @@ import '../../services/auth_service.dart';
 import '../../router/app_router.dart';
 
 class RideLoadingPage extends StatefulWidget {
-  final int? rideId;
+  final String? rideId;
 
   const RideLoadingPage({super.key, this.rideId});
 
@@ -199,7 +199,7 @@ class _RideLoadingPageState extends State<RideLoadingPage>
                             authState.isAuthenticated) {
                           try {
                             final resp = await _apiService.post(
-                              PassengerEndpoints.cancel(widget.rideId!),
+                              RideEndpoints.riderCancel(widget.rideId!),
                               body: {'reason': 'Cancelled by user'},
                             );
 

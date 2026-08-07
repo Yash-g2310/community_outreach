@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../config/api_endpoints.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:image_picker/image_picker.dart';
-import 'dart:typed_data';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/api_service.dart';
@@ -20,9 +17,7 @@ class SignupPage extends StatefulWidget {
 
 class _SignupPageState extends State<SignupPage> {
   bool _isLoading = false;
-  String _selectedRole = 'user';
-  Uint8List? _profileImageBytes; // For web compatibility
-  String? _profileImagePath; // For storing image path info
+  String _selectedRole = 'rider';
 
   // Form key for validation
   final _formKey = GlobalKey<FormState>();
@@ -48,26 +43,6 @@ class _SignupPageState extends State<SignupPage> {
     _phoneController.dispose();
     _erickNoController.dispose();
     super.dispose();
-  }
-
-  // Pick profile image - Web compatible
-  Future<void> _pickImage() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 500,
-      maxHeight: 500,
-      imageQuality: 80,
-    );
-
-    if (image != null) {
-      // Read image as bytes (works on web and mobile)
-      final bytes = await image.readAsBytes();
-      setState(() {
-        _profileImageBytes = bytes;
-        _profileImagePath = image.name;
-      });
-    }
   }
 
   // Handle signup
@@ -101,10 +76,8 @@ class _SignupPageState extends State<SignupPage> {
     }
   }
 
-  // Signup with Django API
+  // Signup with the FastAPI account endpoint.
   Future<void> _signupWithServer() async {
-    final navigator = Navigator.of(context);
-
     Logger.info('=== SIGNUP REQUEST ===', tag: 'Signup');
     Logger.debug('Username: ${_usernameController.text}', tag: 'Signup');
     Logger.debug('Email: ${_emailController.text}', tag: 'Signup');
@@ -113,10 +86,6 @@ class _SignupPageState extends State<SignupPage> {
     if (_selectedRole == 'driver') {
       Logger.debug('Vehicle Number: ${_erickNoController.text}', tag: 'Signup');
     }
-    Logger.debug(
-      'Profile Image: ${_profileImageBytes != null ? 'Selected' : 'None'}',
-      tag: 'Signup',
-    );
     Logger.debug('API Endpoint: ${AuthEndpoints.register}', tag: 'Signup');
 
     try {
@@ -151,35 +120,41 @@ class _SignupPageState extends State<SignupPage> {
         final userData = responseData['user'];
         final userName = userData['username'];
         final userRole = userData['role'];
-        final tokens = responseData['tokens'];
-        final accessToken = tokens['access'];
+        final tokens = Map<String, dynamic>.from(responseData['tokens'] ?? {});
+        final accessToken = tokens['access']?.toString();
+        final refreshToken = tokens['refresh']?.toString();
+        if (accessToken == null || accessToken.isEmpty) {
+          throw Exception('Registration response missing access token');
+        }
 
         Logger.info('=== SIGNUP SUCCESS ===', tag: 'Signup');
         Logger.debug('User Name: $userName', tag: 'Signup');
         Logger.debug('User Role: $userRole', tag: 'Signup');
         Logger.debug('User ID: ${userData['id']}', tag: 'Signup');
         Logger.debug(
-          'Access Token: ${accessToken.substring(0, 20)}...',
+          'Access Token: ${accessToken.length > 20 ? '${accessToken.substring(0, 20)}...' : accessToken}',
           tag: 'Signup',
         );
 
-        // Upload profile picture if selected
-        if (_profileImageBytes != null) {
-          Logger.info('=== UPLOADING PROFILE PICTURE ===', tag: 'Signup');
-          await _uploadProfilePicture(accessToken);
-        }
+        await AuthService().saveAuthData(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+          userData: Map<String, dynamic>.from(userData ?? {}),
+        );
 
         // Show success message
         if (!mounted) return;
 
         _errorService.showSuccess(
           context,
-          'Welcome $userName! Account created successfully. Please log in.',
+          'Welcome $userName! Account created successfully.',
         );
 
-        // Navigate back to login page
-        navigator.pop();
-      } else if (response.statusCode == 400) {
+        AppRouter.pushReplacementNamed(
+          context,
+          userRole == 'driver' ? AppRouter.driverHome : AppRouter.userHome,
+        );
+      } else if (response.statusCode == 400 || response.statusCode == 422) {
         // Handle validation errors
         final responseData = jsonDecode(response.body);
 
@@ -190,14 +165,21 @@ class _SignupPageState extends State<SignupPage> {
         String errorMessage = 'Signup failed:\n';
 
         if (responseData is Map<String, dynamic>) {
-          responseData.forEach((field, errors) {
+          final detail = responseData['detail'];
+          if (detail is List) {
+            for (final error in detail) {
+              errorMessage += 'Invalid input: ${error is Map ? error['msg'] ?? 'Unknown error' : error}\n';
+            }
+          } else {
+            responseData.forEach((field, errors) {
             if (errors is List) {
               errorMessage +=
                   '• ${field.replaceAll('_', ' ')}: ${errors.join(', ')}\n';
             } else {
               errorMessage += '• ${field.replaceAll('_', ' ')}: $errors\n';
             }
-          });
+            });
+          }
         } else {
           errorMessage += responseData.toString();
         }
@@ -215,48 +197,6 @@ class _SignupPageState extends State<SignupPage> {
 
       // Re-throw to be handled by caller
       rethrow;
-    }
-  }
-
-  // Upload profile picture after successful registration
-  Future<void> _uploadProfilePicture(String accessToken) async {
-    if (_profileImageBytes == null) return;
-
-    try {
-      // Save token temporarily for this upload
-      // Note: This is a workaround since ApiService uses AuthService
-      // In a real scenario, we might want to pass token directly to multipart
-      final authService = AuthService();
-      await authService.saveAuthData(accessToken: accessToken);
-
-      final file = http.MultipartFile.fromBytes(
-        'profile_picture',
-        _profileImageBytes!,
-        filename: _profileImagePath ?? 'profile.jpg',
-      );
-
-      Logger.info('Uploading profile picture...', tag: 'Signup');
-      final response = await _apiService.postMultipart(
-        UserProfileEndpoints.profile,
-        method: 'PATCH',
-        files: [file],
-        requiresAuth: true,
-      );
-
-      Logger.debug('Upload Status: ${response.statusCode}', tag: 'Signup');
-      Logger.debug('Upload Response: ${response.body}', tag: 'Signup');
-
-      if (response.statusCode == 200) {
-        Logger.info('Profile picture uploaded successfully', tag: 'Signup');
-      } else {
-        Logger.warning(
-          'Profile picture upload failed: ${response.statusCode}',
-          tag: 'Signup',
-        );
-      }
-    } catch (error) {
-      Logger.error('Profile picture upload error', error: error, tag: 'Signup');
-      // Don't throw - registration was successful, just picture upload failed
     }
   }
 
@@ -309,12 +249,12 @@ class _SignupPageState extends State<SignupPage> {
                       spacing: 12,
                       children: [
                         ChoiceChip(
-                          label: const Text('User'),
-                          selected: _selectedRole == 'user',
+                          label: const Text('Rider'),
+                          selected: _selectedRole == 'rider',
                           onSelected: (selected) {
                             if (!selected) return;
                             setState(() {
-                              _selectedRole = 'user';
+                              _selectedRole = 'rider';
                             });
                           },
                         ),
@@ -329,42 +269,6 @@ class _SignupPageState extends State<SignupPage> {
                           },
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Profile picture upload
-                    const Text(
-                      "Profile Picture (Optional)",
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        height: 120,
-                        width: 120,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(60),
-                          border: Border.all(color: Colors.grey[300]!),
-                        ),
-                        child: _profileImageBytes != null
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(60),
-                                child: Image.memory(
-                                  _profileImageBytes!,
-                                  fit: BoxFit.cover,
-                                ),
-                              )
-                            : const Icon(
-                                Icons.add_a_photo,
-                                size: 40,
-                                color: Colors.grey,
-                              ),
-                      ),
                     ),
                     const SizedBox(height: 20),
 
@@ -411,7 +315,7 @@ class _SignupPageState extends State<SignupPage> {
                       hint: "Enter your password",
                       obscureText: true,
                       validator: (value) =>
-                          validatePassword(value, minLength: 3),
+                          validatePassword(value, minLength: 8),
                     ),
 
                     // Confirm password field

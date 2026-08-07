@@ -18,21 +18,17 @@ class PreviousRidesPage extends StatefulWidget {
 class _PreviousRidesPageState extends State<PreviousRidesPage> {
   List<Map<String, dynamic>> previousRides = [];
   bool isLoading = true;
-  late bool isDriver; // true = driver, false = passenger
   final ErrorService _errorService = ErrorService();
   final ApiService _apiService = ApiService();
 
   @override
   void initState() {
     super.initState();
-    isDriver = widget.isDriver;
     _fetchPreviousRides();
   }
 
   Future<void> _fetchPreviousRides() async {
-    final endpoint = widget.isDriver
-        ? DriverEndpoints.history
-        : PassengerEndpoints.history;
+    final endpoint = RideEndpoints.listHistory;
 
     try {
       final res = await _apiService.get(endpoint);
@@ -40,7 +36,6 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
         setState(() {
-          isDriver = widget.isDriver;
           previousRides = List<Map<String, dynamic>>.from(data['rides'] ?? []);
           isLoading = false;
         });
@@ -97,22 +92,7 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
                 _infoRow('Cancelled At', formatTime(ride['cancelled_at'])),
                 if (isCancelled && ride['cancellation_reason'] != "")
                   _infoRow('Cancellation Reason', ride['cancellation_reason']),
-                const SizedBox(height: 8),
-                // Show other party info depending on detected role
-                if (isDriver == true) ...[
-                  _infoRow('Passenger', ride['passenger']?['username'] ?? '-'),
-                  _infoRow(
-                    'Passenger Phone',
-                    ride['passenger']?['phone_number'] ?? '-',
-                  ),
-                ] else ...[
-                  _infoRow('Driver', ride['driver']?['username'] ?? '-'),
-                  _infoRow(
-                    'Driver Phone',
-                    ride['driver']?['phone_number'] ?? '-',
-                  ),
-                  _infoRow('Vehicle', ride['driver']?['vehicle_number'] ?? '-'),
-                ],
+                _infoRow('Passengers', ride['passenger_count']),
               ],
             ),
           ),
@@ -184,20 +164,10 @@ class _PreviousRidesPageState extends State<PreviousRidesPage> {
                         'Pickup: ${ride['pickup_address'] ?? '-'}',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
-                      subtitle: Text(() {
-                        final status = ride['status'] ?? '-';
-                        final requested = ride['requested_at'] ?? '';
-                        if (isDriver == true) {
-                          final passenger =
-                              ride['passenger']?['username'] ?? '-';
-                          return 'Status: $status\nPassenger: $passenger\nRequested: $requested';
-                        } else {
-                          final driver = ride['driver']?['username'] ?? '-';
-                          final vehicle =
-                              ride['driver']?['vehicle_number'] ?? '-';
-                          return 'Status: $status\nDriver: $driver ($vehicle)\nRequested: $requested';
-                        }
-                      }(), maxLines: 3),
+                      subtitle: Text(
+                        'Status: ${ride['status'] ?? '-'}\nRequested: ${ride['requested_at'] ?? ''}',
+                        maxLines: 2,
+                      ),
                       trailing: const Icon(
                         Icons.arrow_forward_ios_rounded,
                         size: 18,

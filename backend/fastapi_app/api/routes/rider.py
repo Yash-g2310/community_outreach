@@ -22,6 +22,7 @@ from fastapi_app.core.redis import DRIVER_GEO_INDEX_KEY, driver_state_key, get_r
 from fastapi_app.db.models.identity import User
 from fastapi_app.db.models.ride import Ride, RideRequestRecipient, RideStatusHistory
 from fastapi_app.db.session import get_db_session
+from fastapi_app.services.ride_state import transition_ride
 
 router = APIRouter(prefix="/rider", tags=["rider discovery"])
 
@@ -141,7 +142,7 @@ async def create_ride_request(
     # Lock the rider row so concurrent requests cannot both pass the active-ride check.
     await session.scalar(select(User.id).where(User.id == rider_id).with_for_update())
     active_ride = await session.scalar(
-        select(Ride.id).where(Ride.rider_id == rider_id, Ride.status.in_(("searching", "requested", "accepted")))
+        select(Ride.id).where(Ride.rider_id == rider_id, Ride.status.in_(("searching", "accepted", "arrived", "started")))
     )
     if active_ride is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You already have an active ride request")
@@ -158,10 +159,20 @@ async def create_ride_request(
         search_radius_meters=search_radius_meters,
         search_expires_at=search_expires_at,
         status="searching",
+        state_version=1,
     )
     session.add(ride)
     await session.flush()
-    session.add(RideStatusHistory(ride_id=ride.id, status="searching", changed_by_user_id=rider_id))
+    session.add(
+        RideStatusHistory(
+            ride_id=ride.id,
+            status="searching",
+            from_status=None,
+            state_version=1,
+            changed_by_user_id=rider_id,
+            actor_role="rider",
+        )
+    )
 
     try:
         redis: Redis = get_redis()
@@ -208,8 +219,15 @@ async def create_ride_request(
         for driver_id, distance_meters in recipients
     )
     if not recipients:
-        ride.status = "expired"
-        session.add(RideStatusHistory(ride_id=ride.id, status="expired", changed_by_user_id=rider_id))
+        await transition_ride(
+            session,
+            ride,
+            to_status="expired",
+            actor_role="system",
+            actor_id=None,
+            reason="No available drivers were found at request time.",
+            now=now,
+        )
     await session.commit()
 
     event = {

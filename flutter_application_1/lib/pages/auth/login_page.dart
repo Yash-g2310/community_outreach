@@ -38,7 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // Handle login with username and password
+  // Handle login with a registered phone number or email and password.
   void _handleLogin() async {
     // Validate form
     if (!_formKey.currentState!.validate()) {
@@ -78,7 +78,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await _apiService.post(
         AuthEndpoints.login,
-        body: {'username': username, 'password': password},
+        body: {'identifier': username, 'password': password},
         requiresAuth: false,
       );
 
@@ -137,7 +137,11 @@ class _LoginScreenState extends State<LoginScreen> {
       } else {
         // Handle login failure
         final responseData = jsonDecode(response.body);
-        final errorMessage = responseData['error'] ?? 'Login failed';
+        final errorMessage = responseData is Map
+            ? responseData['detail']?.toString() ??
+                responseData['error']?.toString() ??
+                'Login failed'
+            : 'Login failed';
 
         Logger.warning(
           '($requestId) Login Failed :: $errorMessage',
@@ -243,9 +247,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     const SizedBox(height: 30),
 
-                    // Username field
+                    // Phone/email field
                     const Text(
-                      "Username",
+                      "Phone or Email",
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w500,
@@ -254,9 +258,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _usernameController,
-                      validator: validateUsername,
+                      validator: validateLoginIdentifier,
                       decoration: InputDecoration(
-                        hintText: "Enter your Username",
+                        hintText: "Enter your phone number or email",
                         hintStyle: const TextStyle(color: Colors.black38),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,

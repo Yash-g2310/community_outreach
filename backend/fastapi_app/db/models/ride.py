@@ -23,8 +23,8 @@ class Ride(Base):
     __tablename__ = "rides"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('searching', 'requested', 'accepted', 'cancelled_by_rider', "
-            "'cancelled_by_driver', 'completed', 'expired')",
+            "status IN ('searching', 'accepted', 'arrived', 'started', "
+            "'cancelled_by_rider', 'cancelled_by_driver', 'completed', 'expired')",
             name="ck_rides_status",
         ),
     )
@@ -47,14 +47,20 @@ class Ride(Base):
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     search_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     rider: Mapped["User"] = relationship(back_populates="requested_rides", foreign_keys=[rider_id])
     driver: Mapped["User | None"] = relationship(back_populates="driven_rides", foreign_keys=[accepted_driver_id])
     recipients: Mapped[list["RideRequestRecipient"]] = relationship(back_populates="ride", cascade="all, delete-orphan")
     status_history: Mapped[list["RideStatusHistory"]] = relationship(back_populates="ride", cascade="all, delete-orphan")
+    participant_locations: Mapped[list["RideParticipantLocation"]] = relationship(
+        back_populates="ride", cascade="all, delete-orphan"
+    )
 
 
 class RideRequestRecipient(Base):
@@ -84,17 +90,47 @@ class RideStatusHistory(Base):
     __tablename__ = "ride_status_history"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('searching', 'requested', 'accepted', 'cancelled_by_rider', "
-            "'cancelled_by_driver', 'completed', 'expired')",
+            "status IN ('searching', 'accepted', 'arrived', 'started', "
+            "'cancelled_by_rider', 'cancelled_by_driver', 'completed', 'expired')",
             name="ck_ride_status_history_status",
         ),
+        CheckConstraint("actor_role IN ('rider', 'driver', 'system')", name="ck_ride_status_history_actor_role"),
+        UniqueConstraint("ride_id", "state_version", name="uq_ride_status_history_version"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     ride_id: Mapped[UUID] = mapped_column(ForeignKey("rides.id", ondelete="CASCADE"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(30))
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False)
     changed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    actor_role: Mapped[str] = mapped_column(String(20), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     ride: Mapped[Ride] = relationship(back_populates="status_history")
+
+
+class RideParticipantLocation(Base):
+    """The latest shared location for one participant during a ride.
+
+    This deliberately stores only the latest point.  Continuous location history is
+    not needed for ride matching and retaining it would unnecessarily increase the
+    privacy and storage footprint.
+    """
+
+    __tablename__ = "ride_participant_locations"
+    __table_args__ = (
+        CheckConstraint("participant_role IN ('rider', 'driver')", name="ck_ride_participant_location_role"),
+    )
+
+    ride_id: Mapped[UUID] = mapped_column(ForeignKey("rides.id", ondelete="CASCADE"), primary_key=True)
+    participant_role: Mapped[str] = mapped_column(String(20), primary_key=True)
+    location: Mapped[WKBElement] = mapped_column(
+        Geography(geometry_type="POINT", srid=4326, spatial_index=True), nullable=False
+    )
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    ride: Mapped[Ride] = relationship(back_populates="participant_locations")

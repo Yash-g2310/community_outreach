@@ -30,11 +30,13 @@ class Profile {
 
     String username = (userMap['username'] ?? '-')?.toString() ?? '-';
     String email = (userMap['email'] ?? '-')?.toString() ?? '-';
-    String rawPhone = (userMap['phone_number'] ?? '')?.toString() ?? '';
+    String rawPhone =
+        (userMap['phone'] ?? userMap['phone_number'] ?? '')?.toString() ?? '';
     String phone = rawPhone.trim().isEmpty ? 'No phone number' : rawPhone.trim();
     String? picture = (userMap['profile_picture_url'] ?? userMap['profile_picture'])?.toString();
     String role = (userMap['role'] ?? (isDriver ? 'driver' : 'user'))?.toString() ?? (isDriver ? 'driver' : 'user');
-    String? vehicle = data['vehicle_number']?.toString();
+    String? vehicle =
+        (data['vehicle_number'] ?? data['vehicle_license_number'])?.toString();
 
     return Profile(
       username: username,

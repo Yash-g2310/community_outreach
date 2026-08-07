@@ -7,9 +7,10 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from geoalchemy2 import Geometry
 from pydantic import BaseModel, Field, model_validator
 from redis.exceptions import RedisError
-from sqlalchemy import or_, select
+from sqlalchemy import cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_app.core.config import get_settings
@@ -18,23 +19,41 @@ from fastapi_app.core.redis import DRIVER_GEO_INDEX_KEY, get_redis
 from fastapi_app.core.security import decode_access_token
 from fastapi_app.db.models.driver import DriverProfile
 from fastapi_app.db.models.identity import AuthSession, User
-from fastapi_app.db.models.ride import Ride
+from fastapi_app.db.models.ride import Ride, RideParticipantLocation
 from fastapi_app.db.session import get_session_factory
+from fastapi_app.services.ride_state import ACTIVE_RIDE_STATUSES
 
 router = APIRouter(tags=["realtime"])
-_last_driver_location_update: dict[UUID, datetime] = {}
+_last_location_update: dict[tuple[UUID, str], datetime] = {}
 
 
 class DriverLocationUpdate(BaseModel):
     """The only driver-location message accepted from a live socket."""
 
     type: Literal["driver_location_update"]
+    ride_id: UUID | None = None
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     timestamp: datetime
 
     @model_validator(mode="after")
     def require_timezone(self) -> "DriverLocationUpdate":
+        if self.timestamp.tzinfo is None:
+            raise ValueError("timestamp must include a timezone")
+        return self
+
+
+class RiderLocationUpdate(BaseModel):
+    """A rider can share their location only with their accepted driver."""
+
+    type: Literal["rider_location_update"]
+    ride_id: UUID
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    timestamp: datetime
+
+    @model_validator(mode="after")
+    def require_timezone(self) -> "RiderLocationUpdate":
         if self.timestamp.tzinfo is None:
             raise ValueError("timestamp must include a timezone")
         return self
@@ -108,7 +127,7 @@ async def get_authenticated_claims(request: Request, session: AsyncSession) -> d
 
 async def _process_driver_location_update(
     *, driver_id: UUID, update: DriverLocationUpdate
-) -> tuple[str, UUID | None, UUID | None]:
+) -> tuple[str, UUID | None, UUID | None, int | None]:
     """Persist a valid update and keep the available-driver index in sync."""
 
     now = datetime.now(timezone.utc)
@@ -116,7 +135,7 @@ async def _process_driver_location_update(
     if timestamp < now - timedelta(minutes=2) or timestamp > now + timedelta(minutes=1):
         raise ValueError("Location timestamp is stale or too far in the future")
 
-    last_update = _last_driver_location_update.get(driver_id)
+    last_update = _last_location_update.get((driver_id, "driver"))
     min_interval = timedelta(seconds=get_settings().driver_location_min_interval_seconds)
     if last_update is not None and now - last_update < min_interval:
         raise ValueError("Location updates are arriving too quickly")
@@ -149,16 +168,109 @@ async def _process_driver_location_update(
             raise ValueError("Live availability is temporarily unavailable") from None
 
         accepted_ride = None
+        location_sequence = None
         if profile.availability_status == "busy":
             accepted_ride = await session.scalar(
-                select(Ride).where(Ride.accepted_driver_id == driver_id, Ride.status == "accepted")
+                select(Ride)
+                .where(Ride.accepted_driver_id == driver_id, Ride.status.in_(ACTIVE_RIDE_STATUSES))
+                .with_for_update()
+            )
+            if accepted_ride is None:
+                raise ValueError("Driver has no active ride")
+            if update.ride_id is not None and update.ride_id != accepted_ride.id:
+                raise ValueError("Location update is for a different ride")
+            location_sequence = await _store_ride_location(
+                session,
+                ride_id=accepted_ride.id,
+                participant_role="driver",
+                latitude=update.latitude,
+                longitude=update.longitude,
+                captured_at=timestamp,
+                received_at=now,
             )
         await session.commit()
 
-    _last_driver_location_update[driver_id] = now
+    _last_location_update[(driver_id, "driver")] = now
     if accepted_ride is None:
-        return profile.availability_status, None, None
-    return profile.availability_status, accepted_ride.id, accepted_ride.rider_id
+        return profile.availability_status, None, None, None
+    return profile.availability_status, accepted_ride.id, accepted_ride.rider_id, location_sequence
+
+
+async def _store_ride_location(
+    session: AsyncSession,
+    *,
+    ride_id: UUID,
+    participant_role: Literal["rider", "driver"],
+    latitude: float,
+    longitude: float,
+    captured_at: datetime,
+    received_at: datetime,
+) -> int:
+    """Upsert the latest shareable location; a route never stores a GPS trail."""
+
+    location = await session.scalar(
+        select(RideParticipantLocation)
+        .where(
+            RideParticipantLocation.ride_id == ride_id,
+            RideParticipantLocation.participant_role == participant_role,
+        )
+        .with_for_update()
+    )
+    if location is None:
+        session.add(
+            RideParticipantLocation(
+                ride_id=ride_id,
+                participant_role=participant_role,
+                location=geography_point(latitude=latitude, longitude=longitude),
+                captured_at=captured_at,
+                received_at=received_at,
+                sequence=1,
+            )
+        )
+        return 1
+    location.location = geography_point(latitude=latitude, longitude=longitude)
+    location.captured_at = captured_at
+    location.received_at = received_at
+    location.sequence += 1
+    return location.sequence
+
+
+async def _process_rider_location_update(
+    *, rider_id: UUID, update: RiderLocationUpdate
+) -> tuple[UUID, UUID, int]:
+    """Persist and forward rider GPS only after an assigned ride becomes active."""
+
+    now = datetime.now(timezone.utc)
+    timestamp = update.timestamp.astimezone(timezone.utc)
+    if timestamp < now - timedelta(minutes=2) or timestamp > now + timedelta(minutes=1):
+        raise ValueError("Location timestamp is stale or too far in the future")
+    last_update = _last_location_update.get((rider_id, "rider"))
+    min_interval = timedelta(seconds=get_settings().driver_location_min_interval_seconds)
+    if last_update is not None and now - last_update < min_interval:
+        raise ValueError("Location updates are arriving too quickly")
+
+    async with get_session_factory()() as session:
+        ride = await session.scalar(select(Ride).where(Ride.id == update.ride_id).with_for_update())
+        if ride is None:
+            raise ValueError("Ride was not found")
+        if ride.rider_id != rider_id:
+            raise ValueError("Location update is not for your ride")
+        if ride.status not in ACTIVE_RIDE_STATUSES or ride.accepted_driver_id is None:
+            raise ValueError("Rider location sharing is not active for this ride")
+        location_sequence = await _store_ride_location(
+            session,
+            ride_id=ride.id,
+            participant_role="rider",
+            latitude=update.latitude,
+            longitude=update.longitude,
+            captured_at=timestamp,
+            received_at=now,
+        )
+        driver_id = ride.accepted_driver_id
+        await session.commit()
+
+    _last_location_update[(rider_id, "rider")] = now
+    return update.ride_id, driver_id, location_sequence
 
 
 @router.websocket("/ws/app/")
@@ -184,10 +296,12 @@ async def live_events(websocket: WebSocket) -> None:
     await websocket.accept()
     connections.connect(user_id, websocket)
     async with get_session_factory()() as session:
-        active_rides = await session.scalars(
-            select(Ride).where(
-                Ride.status == "accepted",
-                or_(Ride.rider_id == user_id, Ride.accepted_driver_id == user_id),
+        active_rides = list(
+            await session.scalars(
+                select(Ride).where(
+                    Ride.status.in_(ACTIVE_RIDE_STATUSES),
+                    or_(Ride.rider_id == user_id, Ride.accepted_driver_id == user_id),
+                )
             )
         )
         for ride in active_rides:
@@ -198,6 +312,41 @@ async def live_events(websocket: WebSocket) -> None:
                     driver_id=ride.accepted_driver_id,
                 )
     await websocket.send_json({"type": "connection.ready", "user_id": claims["sub"], "roles": claims["roles"]})
+    # A socket may reconnect between GPS writes.  Send the current durable state
+    # and only the other participant's last active-ride location.
+    async with get_session_factory()() as session:
+        location_geometry = cast(RideParticipantLocation.location, Geometry(geometry_type="POINT", srid=4326))
+        for ride in active_rides:
+            peer_role = "driver" if ride.rider_id == user_id else "rider"
+            row = (
+                await session.execute(
+                    select(
+                        func.ST_Y(location_geometry).label("latitude"),
+                        func.ST_X(location_geometry).label("longitude"),
+                        RideParticipantLocation.captured_at,
+                        RideParticipantLocation.sequence,
+                    ).where(
+                        RideParticipantLocation.ride_id == ride.id,
+                        RideParticipantLocation.participant_role == peer_role,
+                    )
+                )
+            ).one_or_none()
+            event: dict[str, object] = {
+                "type": "ride_snapshot",
+                "ride_id": str(ride.id),
+                "status": ride.status,
+                "state_version": ride.state_version,
+                "peer_location": None,
+            }
+            if row is not None:
+                event["peer_location"] = {
+                    "participant": peer_role,
+                    "latitude": float(row.latitude),
+                    "longitude": float(row.longitude),
+                    "timestamp": row.captured_at.isoformat(),
+                    "sequence": row.sequence,
+                }
+            await websocket.send_json(event)
     try:
         while True:
             message = await websocket.receive_json()
@@ -207,20 +356,67 @@ async def live_events(websocket: WebSocket) -> None:
             if message.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
                 continue
-            if message.get("type") != "driver_location_update":
+            message_type = message.get("type")
+            if message_type not in {"driver_location_update", "rider_location_update"}:
                 await websocket.send_json({"type": "error", "detail": "Unsupported message type"})
-                continue
-            if "driver" not in claims["roles"]:
-                await websocket.send_json({"type": "error", "detail": "Driver access is required"})
                 continue
             try:
                 # Recheck signature expiry and session revocation for each live location write.
                 async with get_session_factory()() as session:
                     claims = await _validated_claims(token, session)
-                update = DriverLocationUpdate.model_validate(message)
-                availability, ride_id, rider_id = await _process_driver_location_update(
-                    driver_id=user_id, update=update
-                )
+                if message_type == "driver_location_update":
+                    if "driver" not in claims["roles"]:
+                        raise ValueError("Driver access is required")
+                    update = DriverLocationUpdate.model_validate(message)
+                    availability, ride_id, rider_id, location_sequence = await _process_driver_location_update(
+                        driver_id=user_id, update=update
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "location_updated",
+                            "at": datetime.now(timezone.utc).isoformat(),
+                            "status": availability,
+                        }
+                    )
+                    if ride_id is not None and rider_id is not None and location_sequence is not None:
+                        await connections.send_to_user(
+                            rider_id,
+                            {
+                                "type": "ride_location_updated",
+                                "ride_id": str(ride_id),
+                                "participant": "driver",
+                                "latitude": update.latitude,
+                                "longitude": update.longitude,
+                                "timestamp": update.timestamp.astimezone(timezone.utc).isoformat(),
+                                "sequence": location_sequence,
+                            },
+                        )
+                else:
+                    if "rider" not in claims["roles"]:
+                        raise ValueError("Rider access is required")
+                    update = RiderLocationUpdate.model_validate(message)
+                    ride_id, driver_id, location_sequence = await _process_rider_location_update(
+                        rider_id=user_id, update=update
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "location_updated",
+                            "at": datetime.now(timezone.utc).isoformat(),
+                            "status": "shared_with_driver",
+                        }
+                    )
+                    await connections.send_to_user(
+                        driver_id,
+                        {
+                            "type": "ride_location_updated",
+                            "ride_id": str(ride_id),
+                            "participant": "rider",
+                            "latitude": update.latitude,
+                            "longitude": update.longitude,
+                            "timestamp": update.timestamp.astimezone(timezone.utc).isoformat(),
+                            "sequence": location_sequence,
+                        },
+                    )
             except HTTPException:
                 # A session can be revoked while a socket is open; do not keep it alive.
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication expired")
@@ -228,24 +424,9 @@ async def live_events(websocket: WebSocket) -> None:
             except ValueError:
                 await websocket.send_json({"type": "location_update_rejected"})
                 continue
-
-            await websocket.send_json(
-                {"type": "location_updated", "at": datetime.now(timezone.utc).isoformat(), "status": availability}
-            )
-            if ride_id is not None and rider_id is not None:
-                await connections.send_to_user(
-                    rider_id,
-                    {
-                        "type": "driver_location_updated",
-                        "ride_id": str(ride_id),
-                        "driver_id": str(driver_id),
-                        "latitude": update.latitude,
-                        "longitude": update.longitude,
-                        "timestamp": update.timestamp.astimezone(timezone.utc).isoformat(),
-                    },
-                )
     except (WebSocketDisconnect, ValueError):
         pass
     finally:
         connections.disconnect(user_id, websocket)
-        _last_driver_location_update.pop(user_id, None)
+        _last_location_update.pop((user_id, "driver"), None)
+        _last_location_update.pop((user_id, "rider"), None)

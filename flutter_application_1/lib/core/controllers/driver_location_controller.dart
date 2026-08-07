@@ -12,7 +12,6 @@ class DriverLocationController {
   StreamSubscription<LatLng>? _positionStreamSubscription;
   LatLng? _currentPosition;
   bool _isActive = false;
-  int? _currentRideId;
 
   /// Start location updates
   void startLocationUpdates({
@@ -84,11 +83,6 @@ class DriverLocationController {
     );
   }
 
-  /// Set current ride ID for tracking updates
-  void setCurrentRideId(int? rideId) {
-    _currentRideId = rideId;
-  }
-
   /// Set active status
   void setActive(bool active) {
     _isActive = active;
@@ -116,19 +110,7 @@ class DriverLocationController {
         location.longitude.toStringAsFixed(6),
       );
 
-      if (_currentRideId != null) {
-        Logger.websocket(
-          'Sending Tracking Update for ride $_currentRideId: $truncatedLatitude, $truncatedLongitude',
-          tag: 'DriverLocationController',
-        );
-
-        _wsService.sendDriverMessage({
-          'type': 'tracking_update',
-          'ride_id': _currentRideId,
-          'latitude': truncatedLatitude,
-          'longitude': truncatedLongitude,
-        });
-      } else if (_isActive) {
+      if (_isActive) {
         Logger.websocket(
           'Sending Updated Location via WS (stream): $truncatedLatitude, $truncatedLongitude',
           tag: 'DriverLocationController',
@@ -138,6 +120,7 @@ class DriverLocationController {
           'type': 'driver_location_update',
           'latitude': truncatedLatitude,
           'longitude': truncatedLongitude,
+          'timestamp': DateTime.now().toUtc().toIso8601String(),
         });
       }
     } catch (e) {

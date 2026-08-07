@@ -49,15 +49,9 @@ class RideRequestBottomSheet extends StatelessWidget {
           const SizedBox(height: 16),
 
           // Ride details
-          _buildDetailRow(
-            "Passenger:",
-            notification['passenger_name'] ?? 'Unknown',
-          ),
-          _buildDetailRow("Phone:", notification['passenger_phone'] ?? ''),
           _buildDetailRow("Pickup:", notification['start']),
           _buildDetailRow("Drop-off:", notification['end']),
           _buildDetailRow("Passengers:", "${notification['people']}"),
-          _buildDetailRow("Distance:", "${notification['distance']}m away"),
 
           const SizedBox(height: 24),
           Row(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async';
+import 'dart:convert';
 import '../profile/profile_page.dart';
 import '../../utils/string_utils.dart';
 import 'previous_rides.dart';
@@ -10,6 +11,8 @@ import '../../services/auth_service.dart';
 import '../../services/logger_service.dart';
 import '../../services/error_service.dart';
 import '../../services/location_service.dart';
+import '../../services/api_service.dart';
+import '../../config/api_endpoints.dart';
 import '../../router/app_router.dart';
 import '../../core/mixins/safe_state_mixin.dart';
 import '../../core/controllers/user_websocket_controller.dart';
@@ -28,14 +31,16 @@ class UserMapScreen extends StatefulWidget {
 class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
   LatLng? _currentPosition;
   bool _isLoading = false;
-  final _isLoadingDrivers = false;
+  bool _isLoadingDrivers = false;
   final List<Map<String, dynamic>> _nearbyDrivers = [];
+  Timer? _nearbyDriversRefreshTimer;
 
   // Services and controllers
   final AuthService _authService = AuthService();
   final ErrorService _errorService = ErrorService();
   final UserWebSocketController _wsController = UserWebSocketController();
   final UserRideController _rideController = UserRideController();
+  final ApiService _apiService = ApiService();
 
   // Controllers for text input fields
   final TextEditingController _pickupController = TextEditingController();
@@ -52,6 +57,7 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
 
   @override
   void dispose() {
+    _nearbyDriversRefreshTimer?.cancel();
     // Dispose WebSocket controller
     _wsController.dispose();
 
@@ -83,10 +89,39 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       // Check if authenticated before connecting WebSocket
       final authState = await _authService.getAuthState();
       if (authState.isAuthenticated) {
-        _connectPassengerSocket();
+        await _connectPassengerSocket();
+        if (await _restoreActiveRide()) return;
+        _refreshNearbyDrivers();
+        _nearbyDriversRefreshTimer = Timer.periodic(
+          const Duration(seconds: 10),
+          (_) => _refreshNearbyDrivers(),
+        );
       }
     } catch (e) {
       Logger.error('Error getting location', error: e, tag: 'UserPage');
+    }
+  }
+
+  /// Resume an in-progress request/ride after the app was fully restarted.
+  /// The server remains the source of truth; no ride state is persisted locally.
+  Future<bool> _restoreActiveRide() async {
+    try {
+      final response = await _apiService.get(RideEndpoints.active);
+      if (response.statusCode != 200 || response.body == 'null') return false;
+      final data = Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+      final rideId = data['id']?.toString();
+      final status = data['status']?.toString();
+      if (rideId == null || rideId.isEmpty || status == null || !mounted) return false;
+
+      if (status == 'searching') {
+        AppRouter.pushReplacement(context, RideLoadingPage(rideId: rideId));
+      } else {
+        AppRouter.pushReplacement(context, UserTrackingPage(rideId: rideId));
+      }
+      return true;
+    } catch (error) {
+      Logger.warning('Unable to recover an active rider ride: $error', tag: 'UserPage');
+      return false;
     }
   }
 
@@ -101,9 +136,25 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       jwtToken: authState.accessToken,
       sessionId: null, // Not needed - WebSocket handles auth via token
       csrfToken: null, // Not needed - WebSocket handles auth via token
-      currentPosition: _currentPosition,
       onMessage: _handlePassengerSocketMessage,
     );
+  }
+
+  /// Nearby-driver positions come from FastAPI's Redis-backed REST endpoint.
+  /// The app no longer sends the Django-only `subscribe_nearby` socket event.
+  Future<void> _refreshNearbyDrivers() async {
+    final position = _currentPosition;
+    if (position == null) return;
+
+    safeSetState(() => _isLoadingDrivers = true);
+    final drivers = await _rideController.fetchNearbyDrivers(position);
+    if (!mounted) return;
+    safeSetState(() {
+      _nearbyDrivers
+        ..clear()
+        ..addAll(drivers);
+      _isLoadingDrivers = false;
+    });
   }
 
   // ============================================================
@@ -137,26 +188,13 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
           }
 
           // Navigate to tracking page - WebSocket service will handle messages
-          AppRouter.pushReplacement(context, const UserTrackingPage());
-          break;
-
-        case 'ride_cancelled':
-          // If a loading screen (RideLoadingPage) is on top, close it
-          if (AppRouter.canPop(context)) {
-            try {
-              AppRouter.pop(context);
-            } catch (e) {
-              Logger.warning(
-                'Warning popping loading screen on ride_cancelled: $e',
-                tag: 'UserPage',
-              );
-            }
+          final rideId = data['ride_id']?.toString();
+          if (rideId != null && rideId.isNotEmpty) {
+            AppRouter.pushReplacement(context, UserTrackingPage(rideId: rideId));
           }
-          final String cancelMsg = data['message'] ?? 'Ride was cancelled.';
-          _showErrorDialog('Ride Cancelled', cancelMsg);
           break;
 
-        case 'ride_expired':
+        case 'ride_request_expired':
           if (AppRouter.canPop(context)) {
             try {
               AppRouter.pop(context);
@@ -190,18 +228,6 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
           _showErrorDialog('No Drivers Nearby', ndMsg);
           break;
 
-        // ============================================================
-        // NEARBY DRIVER EVENTS
-        // ============================================================
-
-        case 'driver_status_changed':
-          _handleDriverStatusChanged(data);
-          break;
-
-        case 'driver_location_updated':
-          _handleDriverLocationUpdated(data);
-          break;
-
         default:
           Logger.warning(
             'Unhandled passenger WS event: $eventType',
@@ -215,70 +241,6 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         tag: 'UserPage',
       );
     }
-  }
-
-  // ============================================================
-  // Handle driver going online/offline
-  // ============================================================
-  void _handleDriverStatusChanged(Map<String, dynamic> data) {
-    final driverId = int.tryParse("${data['driver_id']}");
-    final status = data['status'];
-
-    if (driverId == null || !mounted) return;
-
-    Logger.debug("Driver $driverId status changed → $status", tag: 'UserPage');
-
-    // Only action needed: remove driver if explicitly offline
-    if (status == "offline" || status == "busy") {
-      safeSetState(() {
-        _nearbyDrivers.removeWhere((d) => d['driver_id'] == driverId);
-      });
-    }
-  }
-
-  // ============================================================
-  // Handle driver location update
-  // ============================================================
-  void _handleDriverLocationUpdated(Map<String, dynamic> data) {
-    if (!mounted) return;
-
-    final driverId = int.tryParse("${data['driver_id']}");
-    final double? latitude = (data['latitude'] as num?)?.toDouble();
-    final double? longitude = (data['longitude'] as num?)?.toDouble();
-
-    if (driverId == null || latitude == null || longitude == null) {
-      Logger.warning("Ignoring invalid location update.", tag: 'UserPage');
-      return;
-    }
-
-    final String username = data['username']?.toString() ?? "Driver $driverId";
-    final String vehicleNumber =
-        data['vehicle_number']?.toString() ??
-        data['vehicle_no']?.toString() ??
-        "N/A";
-
-    safeSetState(() {
-      final index = _nearbyDrivers.indexWhere(
-        (d) => d['driver_id'] == driverId,
-      );
-
-      if (index == -1) {
-        // Add new driver
-        _nearbyDrivers.add({
-          'driver_id': driverId,
-          'username': username,
-          'vehicle_number': vehicleNumber,
-          'latitude': latitude,
-          'longitude': longitude,
-        });
-      } else {
-        // Update existing
-        _nearbyDrivers[index]['latitude'] = latitude;
-        _nearbyDrivers[index]['longitude'] = longitude;
-        _nearbyDrivers[index]['username'] = username;
-        _nearbyDrivers[index]['vehicle_number'] = vehicleNumber;
-      }
-    });
   }
 
   // ============================================================
@@ -328,6 +290,17 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       );
 
       if (responseData != null && mounted) {
+        final driverCandidates =
+            (responseData['driver_candidates'] as num?)?.toInt() ?? 0;
+        if (driverCandidates == 0) {
+          _errorService.showError(
+            context,
+            responseData['message']?.toString() ??
+                'No drivers are available nearby. Please try again later.',
+          );
+          return;
+        }
+
         _errorService.showSuccess(
           context,
           'Ride request created! ID: ${responseData['id']}',
@@ -339,7 +312,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
         _passengerController.clear();
 
         if (mounted) {
-          AppRouter.push(context, RideLoadingPage(rideId: responseData['id']));
+          AppRouter.push(
+            context,
+            RideLoadingPage(rideId: responseData['id']?.toString()),
+          );
         }
       } else {
         _errorService.showError(context, 'Failed to create ride request');

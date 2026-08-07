@@ -54,23 +54,10 @@ class NearbyDriversInfo extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          ...nearbyDrivers
-              .take(2)
-              .map(
-                (driver) => Padding(
-                  padding: const EdgeInsets.only(bottom: 3),
-                  child: Text(
-                    '${driver['username']} (${driver['vehicle_number']})',
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                ),
-              )
-              .toList(),
-          if (nearbyDrivers.length > 2)
-            Text(
-              'and ${nearbyDrivers.length - 2} more...',
-              style: const TextStyle(fontSize: 11, fontStyle: FontStyle.italic),
-            ),
+          const Text(
+            'Live locations update automatically.',
+            style: TextStyle(fontSize: 11),
+          ),
         ],
       ),
     );

@@ -42,10 +42,10 @@ class AuthService {
     return _prefs?.getString(_keyRefreshToken);
   }
 
-  /// Get the current user role (driver/user)
+  /// Get the current primary role (driver/rider).
   Future<String?> getUserRole() async {
     await init();
-    return _prefs?.getString(_keyUserRole);
+    return _normalizeRole(_prefs?.getString(_keyUserRole));
   }
 
   /// Get the current user data
@@ -72,17 +72,31 @@ class AuthService {
       await _prefs?.setString(_keyRefreshToken, refreshToken);
     }
     if (userData != null) {
-      await _prefs?.setString(_keyUserData, json.encode(userData));
-      final role = userData['role']?.toString();
-      if (role != null) {
-        await _prefs?.setString(_keyUserRole, role);
-      }
+      final normalizedUserData = Map<String, dynamic>.from(userData);
+      final role = _primaryRole(normalizedUserData);
+      normalizedUserData['role'] = role;
+      await _prefs?.setString(_keyUserData, json.encode(normalizedUserData));
+      await _prefs?.setString(_keyUserRole, role);
     }
   }
 
   /// Clear all authentication data (logout)
   Future<void> clearAuthData() async {
     await init();
+    final accessToken = await getAccessToken();
+    if (accessToken != null && accessToken.isNotEmpty) {
+      try {
+        await http
+            .post(
+              Uri.parse(AuthEndpoints.logout),
+              headers: {'Authorization': 'Bearer $accessToken'},
+            )
+            .timeout(const Duration(seconds: 10));
+      } catch (error) {
+        // Local logout must still complete when the server is unreachable.
+        Logger.warning('Unable to revoke the server session during logout: $error', tag: 'AuthService');
+      }
+    }
     await _prefs?.remove(_keyAccessToken);
     await _prefs?.remove(_keyRefreshToken);
     await _prefs?.remove(_keyUserData);
@@ -125,9 +139,17 @@ class AuthService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
-        final newAccessToken = data['access']?.toString();
+        final tokenPayload = data['tokens'] is Map
+            ? Map<String, dynamic>.from(data['tokens'] as Map)
+            : data;
+        final newAccessToken = tokenPayload['access']?.toString();
+        final newRefreshToken = tokenPayload['refresh']?.toString();
         if (newAccessToken != null && newAccessToken.isNotEmpty) {
           await _prefs?.setString(_keyAccessToken, newAccessToken);
+          if (newRefreshToken != null && newRefreshToken.isNotEmpty) {
+            await _prefs?.setString(_keyRefreshToken, newRefreshToken);
+          }
+          await WebSocketService().reconnectWithAccessToken(newAccessToken);
           Logger.info(
             'Access token refreshed successfully',
             tag: 'AuthService',
@@ -160,9 +182,23 @@ class AuthService {
 
     return AuthState.authenticated(
       accessToken: accessToken!,
-      role: role ?? 'user',
+      refreshToken: await getRefreshToken(),
+      role: role ?? 'rider',
       userData: userData ?? {},
     );
+  }
+
+  String _primaryRole(Map<String, dynamic> userData) {
+    final roles = userData['roles'];
+    if (roles is List && roles.map((role) => role.toString()).contains('driver')) {
+      return 'driver';
+    }
+    return _normalizeRole(userData['role']?.toString()) ?? 'rider';
+  }
+
+  String? _normalizeRole(String? role) {
+    if (role == null || role.isEmpty) return role;
+    return role == 'user' ? 'rider' : role;
   }
 }
 
@@ -202,5 +238,6 @@ class AuthState {
   }
 
   bool get isDriver => role == 'driver';
-  bool get isUser => role == 'user' || role == null;
+  bool get isRider => role == 'rider' || role == 'user' || role == null;
+  bool get isUser => isRider;
 }

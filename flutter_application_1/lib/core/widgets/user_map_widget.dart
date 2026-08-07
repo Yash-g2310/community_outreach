@@ -44,42 +44,19 @@ class UserMapWidget extends StatelessWidget {
                   size: 40,
                 ),
               ),
-              // Nearby drivers markers
+              // Nearby-driver pins are anonymous until one accepts the ride.
               ...nearbyDrivers.map((driver) {
                 return Marker(
                   point: LatLng(
                     driver['latitude'].toDouble(),
                     driver['longitude'].toDouble(),
                   ),
-                  width: 80,
-                  height: 80,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.green,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          driver['vehicle_number'] ?? 'N/A',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const Icon(
-                        Icons.local_taxi,
-                        color: Colors.green,
-                        size: 30,
-                      ),
-                    ],
+                  width: 48,
+                  height: 48,
+                  child: const Icon(
+                    Icons.local_taxi,
+                    color: Colors.green,
+                    size: 30,
                   ),
                 );
               }),
