@@ -23,14 +23,15 @@ class UserPageController {
         return;
       }
 
-      // Connect using centralized WebSocket service
-      await _wsService.connectPassenger(jwtToken: jwtToken);
-
       // Subscribe to passenger messages
+      await _wsSubscription?.cancel();
       _wsSubscription = _wsService.passengerMessages.listen((data) {
         Logger.websocket("WS RAW → $data", tag: 'UserPageController');
         onMessage(data);
       });
+
+      // Connect only after the non-buffering broadcast stream has a listener.
+      await _wsService.connectPassenger(jwtToken: jwtToken);
 
       Logger.websocket(
         'Passenger WebSocket connected via service',

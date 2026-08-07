@@ -6,12 +6,14 @@ import '../../services/logger_service.dart';
 class UserWebSocketController {
   final WebSocketService _wsService = WebSocketService();
   StreamSubscription? _subscription;
+  StreamSubscription<void>? _reconnectSubscription;
   final Set<String> _processedRideEvents = <String>{};
 
   /// Connect to passenger WebSocket
   Future<void> connect({
     required String? jwtToken,
     required Function(Map<String, dynamic>) onMessage,
+    Future<void> Function()? onReconnect,
   }) async {
     try {
       if (jwtToken == null || jwtToken.isEmpty) {
@@ -22,12 +24,19 @@ class UserWebSocketController {
         return;
       }
 
-      await _wsService.connectPassenger(jwtToken: jwtToken);
-
+      await _subscription?.cancel();
       _subscription = _wsService.passengerMessages.listen((data) {
         Logger.websocket("WS RAW → $data", tag: 'UserWebSocketController');
         onMessage(data);
       });
+      await _reconnectSubscription?.cancel();
+      _reconnectSubscription = onReconnect == null
+          ? null
+          : _wsService.passengerReconnected.listen((_) {
+              unawaited(onReconnect());
+            });
+
+      await _wsService.connectPassenger(jwtToken: jwtToken);
 
       Logger.websocket(
         'Passenger WebSocket connected via controller',
@@ -66,6 +75,8 @@ class UserWebSocketController {
     try {
       _subscription?.cancel();
       _subscription = null;
+      _reconnectSubscription?.cancel();
+      _reconnectSubscription = null;
     } catch (e) {
       Logger.error(
         'Error cancelling WebSocket subscription',

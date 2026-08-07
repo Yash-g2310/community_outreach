@@ -111,7 +111,8 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       final data = Map<String, dynamic>.from(jsonDecode(response.body) as Map);
       final rideId = data['id']?.toString();
       final status = data['status']?.toString();
-      if (rideId == null || rideId.isEmpty || status == null || !mounted) return false;
+      if (rideId == null || rideId.isEmpty || status == null || !mounted)
+        return false;
 
       if (status == 'searching') {
         AppRouter.pushReplacement(context, RideLoadingPage(rideId: rideId));
@@ -120,7 +121,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
       }
       return true;
     } catch (error) {
-      Logger.warning('Unable to recover an active rider ride: $error', tag: 'UserPage');
+      Logger.warning(
+        'Unable to recover an active rider ride: $error',
+        tag: 'UserPage',
+      );
       return false;
     }
   }
@@ -135,7 +139,14 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
     await _wsController.connect(
       jwtToken: authState.accessToken,
       onMessage: _handlePassengerSocketMessage,
+      onReconnect: _resyncAfterSocketReconnect,
     );
+  }
+
+  Future<void> _resyncAfterSocketReconnect() async {
+    if (!mounted) return;
+    if (await _restoreActiveRide()) return;
+    await _refreshNearbyDrivers();
   }
 
   /// Nearby-driver positions come from FastAPI's Redis-backed REST endpoint.
@@ -187,7 +198,10 @@ class _UserMapScreenState extends State<UserMapScreen> with SafeStateMixin {
           // Navigate to tracking page - WebSocket service will handle messages
           final rideId = data['ride_id']?.toString();
           if (rideId != null && rideId.isNotEmpty) {
-            AppRouter.pushReplacement(context, UserTrackingPage(rideId: rideId));
+            AppRouter.pushReplacement(
+              context,
+              UserTrackingPage(rideId: rideId),
+            );
           }
           break;
 

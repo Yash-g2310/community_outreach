@@ -36,6 +36,12 @@ class LocationConstants {
 
 /// WebSocket-related constants
 class WebSocketConstants {
+  /// Maximum time allowed for the initial WebSocket handshake.
+  static const Duration connectionTimeout = Duration(seconds: 10);
+
+  /// Native WebSocket protocol ping interval used to detect half-open sockets.
+  static const Duration pingInterval = Duration(seconds: 20);
+
   /// Maximum number of reconnection attempts
   static const int maxReconnectAttempts = 5;
 

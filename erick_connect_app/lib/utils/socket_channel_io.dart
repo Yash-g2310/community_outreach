@@ -4,6 +4,11 @@ import 'package:web_socket_channel/io.dart';
 WebSocketChannel createPlatformWebSocketImpl(
   Uri uri, {
   Map<String, dynamic>? headers,
+  Duration? pingInterval,
 }) {
-  return IOWebSocketChannel.connect(uri, headers: headers);
+  return IOWebSocketChannel.connect(
+    uri,
+    headers: headers,
+    pingInterval: pingInterval,
+  );
 }

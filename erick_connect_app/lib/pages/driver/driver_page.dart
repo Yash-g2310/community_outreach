@@ -134,6 +134,7 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
 
     await _wsController.connect(
       jwtToken: authState.accessToken,
+      onReconnect: _resyncAfterSocketReconnect,
       onMessage: (data) {
         if (!mounted) return;
         _wsController.processMessage(
@@ -143,6 +144,12 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
         );
       },
     );
+  }
+
+  Future<void> _resyncAfterSocketReconnect() async {
+    if (!mounted) return;
+    if (await _restoreActiveRide()) return;
+    if (isActive) await _loadPendingRideRequests();
   }
 
   void _handleIncomingRide(Map<String, dynamic> ridePayload) async {
@@ -200,7 +207,8 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
   }
 
   Future<void> _loadPendingRideRequests() async {
-    final pending = await _wsController.rideController.fetchPendingRideRequests();
+    final pending = await _wsController.rideController
+        .fetchPendingRideRequests();
     if (!mounted) return;
     safeSetState(() {
       notifications = pending;
@@ -263,16 +271,25 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
         context,
         RideTrackingPage(
           rideId: rideId,
-          pickupAddress: data['pickup_address']?.toString() ?? 'Pickup location',
-          dropoffAddress: data['dropoff_address']?.toString() ?? 'Destination not provided',
+          pickupAddress:
+              data['pickup_address']?.toString() ?? 'Pickup location',
+          dropoffAddress:
+              data['dropoff_address']?.toString() ?? 'Destination not provided',
           passengerCount: (data['passenger_count'] as num?)?.toInt() ?? 1,
-          pickupLatitude: double.tryParse(data['pickup_latitude']?.toString() ?? ''),
-          pickupLongitude: double.tryParse(data['pickup_longitude']?.toString() ?? ''),
+          pickupLatitude: double.tryParse(
+            data['pickup_latitude']?.toString() ?? '',
+          ),
+          pickupLongitude: double.tryParse(
+            data['pickup_longitude']?.toString() ?? '',
+          ),
         ),
       );
       return true;
     } catch (error) {
-      Logger.warning('Unable to recover an active driver ride: $error', tag: 'DriverPage');
+      Logger.warning(
+        'Unable to recover an active driver ride: $error',
+        tag: 'DriverPage',
+      );
       return false;
     }
   }
@@ -395,15 +412,16 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
             dropoffAddress:
                 notification['end']?.toString() ?? 'Destination not provided',
             passengerCount: (notification['people'] as num?)?.toInt() ?? 1,
-            pickupLatitude:
-                double.tryParse(notification['pickup_lat']?.toString() ?? ''),
-            pickupLongitude:
-                double.tryParse(notification['pickup_lng']?.toString() ?? ''),
+            pickupLatitude: double.tryParse(
+              notification['pickup_lat']?.toString() ?? '',
+            ),
+            pickupLongitude: double.tryParse(
+              notification['pickup_lng']?.toString() ?? '',
+            ),
           ),
         );
 
         _errorService.showSuccess(context, 'Ride accepted successfully! ✅');
-
       } else {
         _errorService.showError(context, 'Failed to accept ride');
       }
@@ -423,7 +441,9 @@ class _DriverPageState extends State<DriverPage> with SafeStateMixin {
 
       if (success) {
         safeSetState(() {
-          notifications.removeWhere((notif) => notif['id']?.toString() == rideId);
+          notifications.removeWhere(
+            (notif) => notif['id']?.toString() == rideId,
+          );
         });
         _errorService.showSuccess(
           context,

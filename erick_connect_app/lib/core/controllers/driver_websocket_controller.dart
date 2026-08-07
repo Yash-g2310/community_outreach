@@ -9,23 +9,37 @@ class DriverWebSocketController {
   final WebSocketService _wsService = WebSocketService();
   final DriverRideController _rideController = DriverRideController();
   StreamSubscription? _subscription;
+  StreamSubscription<void>? _reconnectSubscription;
 
   Future<void> connect({
     required String? jwtToken,
     required void Function(Map<String, dynamic>) onMessage,
+    Future<void> Function()? onReconnect,
   }) async {
     if (jwtToken == null || jwtToken.isEmpty) {
-      Logger.warning('Cannot connect WebSocket: no auth token', tag: 'DriverWebSocketController');
+      Logger.warning(
+        'Cannot connect WebSocket: no auth token',
+        tag: 'DriverWebSocketController',
+      );
       return;
     }
 
     try {
-      await _wsService.connectDriver(jwtToken: jwtToken);
       await _subscription?.cancel();
       _subscription = _wsService.driverMessages.listen((data) {
-        Logger.websocket('DRIVER WS RAW -> $data', tag: 'DriverWebSocketController');
+        Logger.websocket(
+          'DRIVER WS RAW -> $data',
+          tag: 'DriverWebSocketController',
+        );
         onMessage(data);
       });
+      await _reconnectSubscription?.cancel();
+      _reconnectSubscription = onReconnect == null
+          ? null
+          : _wsService.driverReconnected.listen((_) {
+              unawaited(onReconnect());
+            });
+      await _wsService.connectDriver(jwtToken: jwtToken);
     } catch (error) {
       Logger.error(
         'Failed to connect driver WebSocket',
@@ -43,7 +57,10 @@ class DriverWebSocketController {
     final eventType = data['type']?.toString();
     switch (eventType) {
       case 'connection.ready':
-        Logger.websocket('Driver FastAPI socket ready', tag: 'DriverWebSocketController');
+        Logger.websocket(
+          'Driver FastAPI socket ready',
+          tag: 'DriverWebSocketController',
+        );
         break;
       case 'ride_request':
         onRideOffer(data);
@@ -51,12 +68,18 @@ class DriverWebSocketController {
       case 'ride_request_closed':
         final rideId = data['ride_id']?.toString();
         if (rideId != null && rideId.isNotEmpty) {
-          onRideRemoval(rideId, _closedRequestMessage(data['reason']?.toString()));
+          onRideRemoval(
+            rideId,
+            _closedRequestMessage(data['reason']?.toString()),
+          );
         }
         break;
       default:
         // Tracking events are migrated in Stage 4; do not treat them as offers.
-        Logger.debug('Ignoring driver WS event: $eventType', tag: 'DriverWebSocketController');
+        Logger.debug(
+          'Ignoring driver WS event: $eventType',
+          tag: 'DriverWebSocketController',
+        );
     }
   }
 
@@ -78,5 +101,7 @@ class DriverWebSocketController {
   void dispose() {
     _subscription?.cancel();
     _subscription = null;
+    _reconnectSubscription?.cancel();
+    _reconnectSubscription = null;
   }
 }

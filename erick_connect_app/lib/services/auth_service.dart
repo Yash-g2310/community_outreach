@@ -17,6 +17,10 @@ class AuthService {
   AuthService._internal();
 
   SharedPreferences? _prefs;
+  Future<bool>? _refreshInFlight;
+  bool _reconnectWebSocketsAfterRefresh = false;
+  bool _isClearingAuth = false;
+  int _authEpoch = 0;
 
   /// Initialize the service by loading SharedPreferences
   Future<void> init() async {
@@ -67,6 +71,7 @@ class AuthService {
     Map<String, dynamic>? userData,
   }) async {
     await init();
+    _authEpoch++;
     await _prefs?.setString(_keyAccessToken, accessToken);
     if (refreshToken != null) {
       await _prefs?.setString(_keyRefreshToken, refreshToken);
@@ -83,42 +88,72 @@ class AuthService {
   /// Clear all authentication data (logout)
   Future<void> clearAuthData() async {
     await init();
-    final accessToken = await getAccessToken();
-    if (accessToken != null && accessToken.isNotEmpty) {
-      try {
-        await http
-            .post(
-              Uri.parse(AuthEndpoints.logout),
-              headers: {'Authorization': 'Bearer $accessToken'},
-            )
-            .timeout(const Duration(seconds: 10));
-      } catch (error) {
-        // Local logout must still complete when the server is unreachable.
-        Logger.warning('Unable to revoke the server session during logout: $error', tag: 'AuthService');
-      }
-    }
-    await _prefs?.remove(_keyAccessToken);
-    await _prefs?.remove(_keyRefreshToken);
-    await _prefs?.remove(_keyUserData);
-    await _prefs?.remove(_keyUserRole);
-
-    // Disconnect all WebSocket connections on logout
+    _isClearingAuth = true;
+    _authEpoch++;
     try {
-      final wsService = WebSocketService();
-      wsService.disconnectAll();
-    } catch (e) {
-      Logger.error(
-        'Error disconnecting WebSockets on logout',
-        error: e,
-        tag: 'AuthService',
-      );
+      final accessToken = await getAccessToken();
+      if (accessToken != null && accessToken.isNotEmpty) {
+        try {
+          await http
+              .post(
+                Uri.parse(AuthEndpoints.logout),
+                headers: {'Authorization': 'Bearer $accessToken'},
+              )
+              .timeout(const Duration(seconds: 10));
+        } catch (error) {
+          // Local logout must still complete when the server is unreachable.
+          Logger.warning(
+            'Unable to revoke the server session during logout: $error',
+            tag: 'AuthService',
+          );
+        }
+      }
+      await _prefs?.remove(_keyAccessToken);
+      await _prefs?.remove(_keyRefreshToken);
+      await _prefs?.remove(_keyUserData);
+      await _prefs?.remove(_keyUserRole);
+
+      // Disconnect all WebSocket connections on logout
+      try {
+        final wsService = WebSocketService();
+        wsService.disconnectAll();
+      } catch (e) {
+        Logger.error(
+          'Error disconnecting WebSockets on logout',
+          error: e,
+          tag: 'AuthService',
+        );
+      }
+    } finally {
+      _isClearingAuth = false;
     }
   }
 
   /// Refresh access token using refresh token
   /// Returns true if refresh was successful, false otherwise
-  Future<bool> refreshAccessToken() async {
+  Future<bool> refreshAccessToken({bool reconnectWebSockets = true}) {
+    if (_isClearingAuth) return Future<bool>.value(false);
+    if (reconnectWebSockets) {
+      _reconnectWebSocketsAfterRefresh = true;
+    }
+
+    final existing = _refreshInFlight;
+    if (existing != null) return existing;
+
+    late final Future<bool> operation;
+    operation = _performAccessTokenRefresh().whenComplete(() {
+      if (identical(_refreshInFlight, operation)) {
+        _refreshInFlight = null;
+        _reconnectWebSocketsAfterRefresh = false;
+      }
+    });
+    _refreshInFlight = operation;
+    return operation;
+  }
+
+  Future<bool> _performAccessTokenRefresh() async {
     await init();
+    final refreshEpoch = _authEpoch;
     final refreshToken = await getRefreshToken();
     if (refreshToken == null || refreshToken.isEmpty) {
       Logger.warning(
@@ -145,11 +180,29 @@ class AuthService {
         final newAccessToken = tokenPayload['access']?.toString();
         final newRefreshToken = tokenPayload['refresh']?.toString();
         if (newAccessToken != null && newAccessToken.isNotEmpty) {
+          if (_isClearingAuth || refreshEpoch != _authEpoch) {
+            Logger.info(
+              'Ignoring token refresh completed after authentication changed',
+              tag: 'AuthService',
+            );
+            return false;
+          }
           await _prefs?.setString(_keyAccessToken, newAccessToken);
           if (newRefreshToken != null && newRefreshToken.isNotEmpty) {
             await _prefs?.setString(_keyRefreshToken, newRefreshToken);
           }
-          await WebSocketService().reconnectWithAccessToken(newAccessToken);
+          if (_reconnectWebSocketsAfterRefresh) {
+            try {
+              await WebSocketService().reconnectWithAccessToken(newAccessToken);
+            } catch (error) {
+              // A valid HTTP token must remain usable even if the live channel
+              // cannot reconnect immediately; the socket owns its retry loop.
+              Logger.warning(
+                'Access token refreshed, but WebSocket reconnect failed: $error',
+                tag: 'AuthService',
+              );
+            }
+          }
           Logger.info(
             'Access token refreshed successfully',
             tag: 'AuthService',
@@ -190,7 +243,8 @@ class AuthService {
 
   String _primaryRole(Map<String, dynamic> userData) {
     final roles = userData['roles'];
-    if (roles is List && roles.map((role) => role.toString()).contains('driver')) {
+    if (roles is List &&
+        roles.map((role) => role.toString()).contains('driver')) {
       return 'driver';
     }
     return _normalizeRole(userData['role']?.toString()) ?? 'rider';

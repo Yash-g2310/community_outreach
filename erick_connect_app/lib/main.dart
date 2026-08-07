@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'config/constants.dart';
 import 'config/app_constants.dart';
 import 'router/app_router.dart';
 import 'services/auth_service.dart';
+import 'services/websocket_service.dart';
 import 'core/theme/app_theme.dart';
 
 void main() async {
@@ -30,16 +33,46 @@ void main() async {
   runApp(MyApp(initialRoute: initialRoute));
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   final String initialRoute;
 
   const MyApp({super.key, required this.initialRoute});
 
   @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  AppLifecycleState? _lastLifecycleState;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final previous = _lastLifecycleState;
+    _lastLifecycleState = state;
+    if (state == AppLifecycleState.resumed &&
+        previous != null &&
+        previous != AppLifecycleState.resumed) {
+      unawaited(WebSocketService().recoverConnectionsAfterResume());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      initialRoute: initialRoute,
+      initialRoute: widget.initialRoute,
       onGenerateRoute: AppRouter.generateRoute,
       title: 'E-Rick Connect',
       theme: AppTheme.lightTheme,

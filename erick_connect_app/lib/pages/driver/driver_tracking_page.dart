@@ -42,14 +42,19 @@ class RideTrackingPage extends StatefulWidget {
   State<RideTrackingPage> createState() => _RideTrackingPageState();
 }
 
-class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin {
+class _RideTrackingPageState extends State<RideTrackingPage>
+    with SafeStateMixin {
   final ApiService _apiService = ApiService();
   final AuthService _authService = AuthService();
   final WebSocketService _webSocketService = WebSocketService();
   final ErrorService _errorService = ErrorService();
-  final RideLocationPublisher _locationPublisher = RideLocationPublisher(role: 'driver');
+  final RideLocationPublisher _locationPublisher = RideLocationPublisher(
+    role: 'driver',
+  );
 
   StreamSubscription? _subscription;
+  StreamSubscription<void>? _reconnectSubscription;
+  StreamSubscription<WebSocketConnectionStatus>? _connectionSubscription;
   LatLng? _driverLocation;
   LatLng? _riderLocation;
   String _status = 'accepted';
@@ -58,42 +63,74 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
   bool _isLoading = true;
   bool _isActionPending = false;
   bool _terminalHandled = false;
+  late WebSocketConnectionStatus _connectionStatus;
 
   @override
   void initState() {
     super.initState();
+    _connectionStatus = _webSocketService.driverConnectionStatus;
     _subscription = _webSocketService.driverMessages.listen(_handleEvent);
+    _reconnectSubscription = _webSocketService.driverReconnected.listen((_) {
+      unawaited(_resyncAfterReconnect());
+    });
+    _connectionSubscription = _webSocketService.driverConnectionStates.listen((
+      status,
+    ) {
+      if (mounted) safeSetState(() => _connectionStatus = status);
+    });
     _initialize();
   }
 
   Future<void> _initialize() async {
     final authState = await _authService.getAuthState();
     if (!authState.isAuthenticated) return;
-    await _webSocketService.connectDriver(jwtToken: authState.accessToken);
+    try {
+      await _webSocketService.connectDriver(jwtToken: authState.accessToken);
+    } catch (error) {
+      Logger.warning(
+        'Driver WebSocket is unavailable; waiting for automatic recovery: $error',
+        tag: 'DriverTracking',
+      );
+    }
     await _refreshSnapshot();
     if (!_isTerminal(_status)) {
       await _locationPublisher.start(
         rideId: widget.rideId,
-        onLocation: (location) => safeSetState(() => _driverLocation = location),
+        onLocation: (location) =>
+            safeSetState(() => _driverLocation = location),
       );
     }
     safeSetState(() => _isLoading = false);
   }
 
+  Future<void> _resyncAfterReconnect() async {
+    if (!mounted) return;
+    await _refreshSnapshot();
+    if (!mounted || _isTerminal(_status)) return;
+    _locationPublisher.republishLatest();
+  }
+
   Future<void> _refreshSnapshot() async {
     try {
-      final response = await _apiService.get(RideEndpoints.snapshot(widget.rideId));
+      final response = await _apiService.get(
+        RideEndpoints.snapshot(widget.rideId),
+      );
       if (response.statusCode == 200) {
         _applySnapshot(_decode(response.body));
       } else if (mounted) {
         _errorService.handleError(context, null, response: response);
       }
     } catch (error) {
-      Logger.error('Unable to load driver ride snapshot', error: error, tag: 'DriverTracking');
+      Logger.error(
+        'Unable to load driver ride snapshot',
+        error: error,
+        tag: 'DriverTracking',
+      );
     }
   }
 
-  Map<String, dynamic> _decode(String body) => Map<String, dynamic>.from(jsonDecode(body) as Map);
+  Map<String, dynamic> _decode(String body) =>
+      Map<String, dynamic>.from(jsonDecode(body) as Map);
 
   void _handleEvent(Map<String, dynamic> event) {
     if (!mounted || event['ride_id']?.toString() != widget.rideId) return;
@@ -115,7 +152,10 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
   }
 
   void _applySnapshot(Map<dynamic, dynamic> snapshot) {
-    _applyState(snapshot['status']?.toString(), _asInt(snapshot['state_version']));
+    _applyState(
+      snapshot['status']?.toString(),
+      _asInt(snapshot['state_version']),
+    );
     final peer = snapshot['peer_location'];
     if (peer is Map) _applyPeerLocation(Map<String, dynamic>.from(peer));
   }
@@ -153,9 +193,14 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: Text(_status == 'completed' ? 'Ride Completed' : 'Ride Ended'),
-        content: Text(reason?.isNotEmpty == true ? reason! : _terminalMessage(_status)),
+        content: Text(
+          reason?.isNotEmpty == true ? reason! : _terminalMessage(_status),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('OK')),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
         ],
       ),
     );
@@ -191,7 +236,10 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
           title: const Text('Cancel ride?'),
           content: const Text('This will end the current ride for the rider.'),
           actions: [
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Keep ride')),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Keep ride'),
+            ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
               child: const Text('Cancel', style: TextStyle(color: Colors.red)),
@@ -207,7 +255,11 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
       final response = await _apiService.post(endpoint, body: body);
       if (response.statusCode == 200) {
         final data = _decode(response.body);
-        _applyState(data['status']?.toString(), _asInt(data['state_version']), reason: body?['reason']?.toString());
+        _applyState(
+          data['status']?.toString(),
+          _asInt(data['state_version']),
+          reason: body?['reason']?.toString(),
+        );
       } else if (mounted) {
         _errorService.handleError(context, null, response: response);
       }
@@ -218,14 +270,17 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
     }
   }
 
-  int? _asInt(dynamic value) => value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
-  double? _asDouble(dynamic value) => value is num ? value.toDouble() : double.tryParse(value?.toString() ?? '');
+  int? _asInt(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+  double? _asDouble(dynamic value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '');
   bool _isTerminal(String status) => const {
-        'completed',
-        'cancelled_by_rider',
-        'cancelled_by_driver',
-        'expired',
-      }.contains(status);
+    'completed',
+    'cancelled_by_rider',
+    'cancelled_by_driver',
+    'expired',
+  }.contains(status);
 
   String _terminalMessage(String status) {
     switch (status) {
@@ -243,6 +298,8 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
   @override
   void dispose() {
     _subscription?.cancel();
+    _reconnectSubscription?.cancel();
+    _connectionSubscription?.cancel();
     _locationPublisher.dispose();
     super.dispose();
   }
@@ -253,7 +310,10 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
     return PopScope(
       canPop: _isTerminal(_status),
       child: Scaffold(
-        appBar: AppBar(title: const Text('Active Ride'), automaticallyImplyLeading: false),
+        appBar: AppBar(
+          title: const Text('Active Ride'),
+          automaticallyImplyLeading: false,
+        ),
         body: _isLoading || center == null
             ? const Center(child: CircularProgressIndicator())
             : Column(
@@ -267,60 +327,90 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
     );
   }
 
-  LatLng? get _pickupLocation => widget.pickupLatitude != null && widget.pickupLongitude != null
+  LatLng? get _pickupLocation =>
+      widget.pickupLatitude != null && widget.pickupLongitude != null
       ? LatLng(widget.pickupLatitude!, widget.pickupLongitude!)
       : null;
 
   Widget _detailsPanel() => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        color: Colors.blue.shade50,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Status: ${_status.replaceAll('_', ' ')}', style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('Pickup: ${widget.pickupAddress}'),
-            Text('Drop-off: ${widget.dropoffAddress}'),
-            Text('Passengers: ${widget.passengerCount}'),
-          ],
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    color: Colors.blue.shade50,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Status: ${_status.replaceAll('_', ' ')}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-      );
+        Text('Pickup: ${widget.pickupAddress}'),
+        Text('Drop-off: ${widget.dropoffAddress}'),
+        Text('Passengers: ${widget.passengerCount}'),
+        Text('Live connection: ${_connectionLabel()}'),
+      ],
+    ),
+  );
+
+  String _connectionLabel() {
+    switch (_connectionStatus) {
+      case WebSocketConnectionStatus.connected:
+        return 'connected';
+      case WebSocketConnectionStatus.connecting:
+        return 'connecting';
+      case WebSocketConnectionStatus.reconnecting:
+        return 'reconnecting';
+      case WebSocketConnectionStatus.failed:
+        return 'unavailable — retrying';
+      case WebSocketConnectionStatus.disconnected:
+        return 'disconnected';
+    }
+  }
 
   Widget _map(LatLng center) => FlutterMap(
-        options: MapOptions(initialCenter: center, initialZoom: 15),
-        children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.erick.connect',
-            tileProvider: kIsWeb ? CancellableNetworkTileProvider() : NetworkTileProvider(),
-          ),
-          MarkerLayer(
-            markers: [
-              if (_driverLocation != null)
-                Marker(
-                  point: _driverLocation!,
-                  width: 48,
-                  height: 48,
-                  child: const Icon(Icons.local_taxi, color: Colors.blue, size: 36),
-                ),
-              if (_riderLocation != null)
-                Marker(
-                  point: _riderLocation!,
-                  width: 48,
-                  height: 48,
-                  child: const Icon(Icons.person_pin_circle, color: Colors.green, size: 36),
-                ),
-              if (_pickupLocation != null)
-                Marker(
-                  point: _pickupLocation!,
-                  width: 40,
-                  height: 40,
-                  child: const Icon(Icons.location_on, color: Colors.orange, size: 32),
-                ),
-            ],
-          ),
+    options: MapOptions(initialCenter: center, initialZoom: 15),
+    children: [
+      TileLayer(
+        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        userAgentPackageName: 'com.erick.connect',
+        tileProvider: kIsWeb
+            ? CancellableNetworkTileProvider()
+            : NetworkTileProvider(),
+      ),
+      MarkerLayer(
+        markers: [
+          if (_driverLocation != null)
+            Marker(
+              point: _driverLocation!,
+              width: 48,
+              height: 48,
+              child: const Icon(Icons.local_taxi, color: Colors.blue, size: 36),
+            ),
+          if (_riderLocation != null)
+            Marker(
+              point: _riderLocation!,
+              width: 48,
+              height: 48,
+              child: const Icon(
+                Icons.person_pin_circle,
+                color: Colors.green,
+                size: 36,
+              ),
+            ),
+          if (_pickupLocation != null)
+            Marker(
+              point: _pickupLocation!,
+              width: 40,
+              height: 40,
+              child: const Icon(
+                Icons.location_on,
+                color: Colors.orange,
+                size: 32,
+              ),
+            ),
         ],
-      );
+      ),
+    ],
+  );
 
   Widget _actions() {
     String? primaryAction;
@@ -347,7 +437,9 @@ class _RideTrackingPageState extends State<RideTrackingPage> with SafeStateMixin
         children: [
           Expanded(
             child: OutlinedButton.icon(
-              onPressed: _isActionPending || _isTerminal(_status) ? null : () => _performAction('cancel'),
+              onPressed: _isActionPending || _isTerminal(_status)
+                  ? null
+                  : () => _performAction('cancel'),
               icon: const Icon(Icons.cancel, color: Colors.red),
               label: const Text('Cancel'),
             ),
