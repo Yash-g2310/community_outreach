@@ -7,9 +7,9 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from fastapi_app.core.config import get_settings
-from fastapi_app.db.base import Base
-import fastapi_app.db.models  # noqa: F401 - registers all ORM tables on Base.metadata
+from app.core.config import get_settings
+from app.db.base import Base
+import app.db.models  # noqa: F401 - registers all ORM tables on Base.metadata
 
 
 config = context.config

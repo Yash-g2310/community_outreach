@@ -15,7 +15,7 @@ Thumbs.db
 !.vscode/settings.json
 !.vscode/*.code-workspace
 
-# Python / Django
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -34,16 +34,12 @@ dist/
 *.egg-info/
 pip-wheel-metadata/
 
-# Django local secrets / env / generated runtime files
+# Local secrets / environment files
 .env
 .env.*
 local_settings.py
 secrets.json
 credentials.json
-
-# Database files (backend) - adjust if you want to commit sqlite
-backend/db.sqlite3
-*.sqlite3
 
 # Migrations: keep source files tracked; ignore caches/compiled bits
 **/migrations/__pycache__/

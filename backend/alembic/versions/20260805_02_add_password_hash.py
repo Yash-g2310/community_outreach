@@ -14,7 +14,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("users", sa.Column("password_hash", sa.String(length=255), nullable=True))
-    # Existing rows are legacy Django data and must reset a password before FastAPI login.
+    # Existing rows from the previous system must reset a password before FastAPI login.
     op.execute("UPDATE users SET password_hash = 'legacy-password-reset-required' WHERE password_hash IS NULL")
     op.alter_column("users", "password_hash", nullable=False)
 

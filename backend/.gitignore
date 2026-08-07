@@ -17,22 +17,15 @@ build/
 *.egg-info/
 pip-wheel-metadata/
 
-# Django files
-# Ignore SQLite DB by default (remove if you want to store it in repo)
-db.sqlite3
-*.sqlite3
-
-# Uploaded media and collected static files
-media/
-staticfiles/
-
-# Local settings / secrets / env
-local_settings.py
+# Local secrets / environment
 .env
 .env.*
 secrets.json
 
-# Migrations: keep migration source files tracked, ignore compiled/misc inside them
+# Local uploaded media
+media/
+
+# Migrations: keep source files tracked, ignore compiled bits
 **/migrations/__pycache__/
 **/migrations/*.pyc
 

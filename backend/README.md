@@ -1,8 +1,19 @@
 # E-Rick Connect backend
 
-The active backend is FastAPI in `fastapi_app`. The Django folders remain only
-as legacy code while the migration is completed; do not add new API or socket
-features there.
+The backend follows a conventional FastAPI layout: application code is in `app/`,
+database migrations are in `alembic/`, and local runtime media is kept in `media/`.
+
+```text
+backend/
+├── app/
+│   ├── api/v1/      # HTTP and WebSocket endpoints
+│   ├── core/        # configuration, security, infrastructure helpers
+│   ├── db/models/   # SQLAlchemy models and session setup
+│   ├── services/    # domain workflows
+│   └── main.py      # FastAPI application factory
+├── alembic/         # database migrations
+└── media/           # local uploaded media (not source code)
+```
 
 ## Local setup
 
@@ -12,7 +23,7 @@ characters. Apply the schema and start FastAPI from `backend/`:
 
 ```powershell
 alembic upgrade head
-uvicorn fastapi_app.main:app --reload
+uvicorn app.main:app --reload
 ```
 
 ## Authentication
